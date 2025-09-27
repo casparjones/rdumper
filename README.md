@@ -1,71 +1,72 @@
 # rDumper
 
-A modern web-based GUI wrapper for `mydumper` and `myloader` built with Rust and Vue.js.
+A modern **web-based GUI wrapper** for [`mydumper`](https://github.com/mydumper/mydumper) and [`myloader`](https://github.com/mydumper/mydumper) — built with **Rust** (backend) and **Vue 3 + TailwindCSS + DaisyUI** (frontend).
 
-## Features
+---
 
-- 🗄️ **Database Management**: Configure and manage multiple MySQL database connections
-- ⏰ **Scheduled Backups**: Create and manage backup tasks with cron-like scheduling
-- 📊 **Job Monitoring**: Real-time monitoring of backup and restore operations
-- 💾 **Backup Management**: Browse, restore, and manage your database backups
-- 🧹 **Automatic Cleanup**: Configurable automatic cleanup of old backups
-- 🎨 **Modern UI**: Clean, responsive interface built with Vue 3, Tailwind CSS, and DaisyUI
-- 🐳 **Docker Ready**: Multi-stage Docker build for easy deployment
-- 🔒 **Secure**: Non-root container execution with proper permission handling
+## ✨ Features
 
-## Technology Stack
+- 🗄️ **Database Management**: Configure and manage multiple MySQL database connections  
+- ⏰ **Scheduled Backups**: Create recurring tasks with cron-like scheduling  
+- 📊 **Job Monitoring**: Real-time tracking of backup and restore operations  
+- 💾 **Backup Management**: Browse, restore, and manage your database backups  
+- 🧹 **Automatic Cleanup**: Remove old backups after a configurable retention period  
+- 🎨 **Modern UI**: Responsive interface built with Vue 3, TailwindCSS v4, and DaisyUI v5  
+- 🐳 **Docker Ready**: Multi-stage Docker build for easy deployment  
+- 🔒 **Secure**: Non-root container execution with proper permission handling  
+
+---
+
+## 🛠️ Technology Stack
 
 ### Backend (Rust)
-- **Framework**: Axum (async web framework)
-- **Database**: SQLite with SQLx (compile-time checked queries)
-- **Scheduling**: tokio-cron-scheduler
-- **CLI**: clap for command-line arguments
-- **Logging**: tracing + tracing-subscriber
+- **Framework**: [Axum](https://github.com/tokio-rs/axum) (async web framework)  
+- **Database**: SQLite with [SQLx](https://github.com/launchbadge/sqlx) (compile-time checked queries)  
+- **Scheduling**: [tokio-cron-scheduler](https://github.com/emabee/tokio-cron-scheduler)  
+- **CLI**: [clap](https://github.com/clap-rs/clap) for argument parsing  
+- **Logging**: [tracing](https://github.com/tokio-rs/tracing)  
 
 ### Frontend (Vue 3)
-- **Framework**: Vue 3 with Composition API
-- **Build Tool**: Vite
-- **Styling**: Tailwind CSS v4 + DaisyUI v5
-- **Routing**: Vue Router
-- **HTTP Client**: Axios
+- **Framework**: Vue 3 (Composition API)  
+- **Build Tool**: Vite  
+- **Styling**: TailwindCSS v4 + DaisyUI v5  
+- **Routing**: Vue Router  
+- **HTTP Client**: Axios  
 
-## Prerequisites
+---
 
-- Docker and Docker Compose (recommended)
-- OR manually:
-  - Rust 1.70+
-  - Node.js 20+
-  - mydumper/myloader installed
-
-## Quick Start with Docker
+## 🚀 Quick Start (Docker)
 
 1. Clone the repository:
-```bash
-git clone <repository-url>
-cd rdumper
-```
+   ```bash
+   git clone <repository-url>
+   cd rdumper
 
 2. Start with Docker Compose:
-```bash
-docker-compose up -d
-```
+
+   ```bash
+   docker-compose up -d
+   ```
 
 3. Access the application:
-- Web UI: http://localhost:3000
-- API: http://localhost:3000/api
 
-## Manual Development Setup
+    * Web UI → [http://localhost:3000](http://localhost:3000)
+    * API → [http://localhost:3000/api](http://localhost:3000/api)
 
-### Backend Development
+---
+
+## 💻 Manual Development Setup
+
+### Backend
 
 ```bash
 cd backend
 cargo run
 ```
 
-The backend will start on http://localhost:3000
+Backend runs on [http://localhost:3000](http://localhost:3000).
 
-### Frontend Development
+### Frontend
 
 ```bash
 cd frontend
@@ -73,35 +74,18 @@ npm install
 npm run dev
 ```
 
-The frontend dev server will start on http://localhost:5173 with proxy to backend.
+Frontend runs on [http://localhost:5173](http://localhost:5173) with proxy to backend.
 
-## Building for Production
+---
 
-### Build Frontend
-```bash
-cd frontend
-npm run build
-```
-
-### Build Backend
-```bash
-cd backend
-cargo build --release
-```
-
-### Build Docker Image
-```bash
-docker build -t rdumper .
-```
-
-## Configuration
+## ⚙️ Configuration
 
 ### Environment Variables
 
-- `RUST_LOG`: Logging level (default: `info`)
-- `DATABASE_URL`: SQLite database path (default: `sqlite:rdumper.db`)
-- `BACKUP_DIR`: Backup storage directory (default: `/data/backups`)
-- `STATIC_DIR`: Frontend static files directory (default: `../frontend/dist`)
+* `RUST_LOG`: Logging level (default: `info`)
+* `DATABASE_URL`: SQLite database path (default: `sqlite:rdumper.db`)
+* `BACKUP_DIR`: Backup storage directory (default: `/data/backups`)
+* `STATIC_DIR`: Frontend static files directory (default: `../frontend/dist`)
 
 ### Command Line Arguments
 
@@ -109,44 +93,23 @@ docker build -t rdumper .
 ./rdumper-backend --help
 ```
 
-- `--host`: Server host (default: `0.0.0.0`)
-- `--port`: Server port (default: `3000`)
-- `--database-url`: SQLite database URL
-- `--backup-dir`: Backup storage directory
-- `--static-dir`: Static files directory
+---
 
-## API Documentation
+## 📖 API Endpoints
 
-### Endpoints
+* `GET /api/database-configs` → List database configs
+* `POST /api/database-configs` → Create database config
+* `GET /api/tasks` → List backup tasks
+* `POST /api/tasks` → Create backup task
+* `GET /api/jobs` → List jobs
+* `GET /api/backups` → List backups
+* `GET /api/system` → System information
 
-- `GET /api/database-configs` - List database configurations
-- `POST /api/database-configs` - Create database configuration
-- `GET /api/tasks` - List backup tasks
-- `POST /api/tasks` - Create backup task
-- `GET /api/jobs` - List jobs
-- `GET /api/backups` - List backups
-- `GET /api/system` - System information
+---
 
-## Usage
+## 🐳 Docker Deployment
 
-### 1. Configure Databases
-Add your MySQL database connections through the "Databases" section.
-
-### 2. Create Backup Tasks
-Set up scheduled backup tasks with:
-- Cron schedule expression
-- Compression type (none, gzip, zstd)
-- Automatic cleanup settings
-
-### 3. Monitor Jobs
-Track backup and restore operations in real-time through the "Jobs" section.
-
-### 4. Manage Backups
-Browse and restore backups through the "Backups" section.
-
-## Docker Deployment
-
-### Using Docker Compose (Recommended)
+### Docker Compose (Recommended)
 
 ```yaml
 version: '3.8'
@@ -166,7 +129,7 @@ volumes:
   rdumper_data:
 ```
 
-### Using Docker Run
+### Docker Run
 
 ```bash
 docker run -d \
@@ -178,25 +141,33 @@ docker run -d \
   rdumper:latest
 ```
 
-## Security Considerations
+---
 
-- The application runs as a non-root user in the container
-- Database passwords are stored encrypted
-- All file operations are performed within the designated backup directory
-- Container includes only necessary dependencies
+## 🔒 Security Notes
 
-## Contributing
+* Runs as a non-root user in the container
+* Database credentials stored encrypted
+* All file operations restricted to backup directory
+* Container includes only required dependencies
 
-1. Fork the repository
+---
+
+## 🤝 Contributing
+
+1. Fork this repository
 2. Create a feature branch
-3. Make your changes
-4. Add tests if applicable
-5. Submit a pull request
+3. Commit and push your changes
+4. Open a Pull Request
 
-## License
+---
 
-[Add your license here]
+## 📄 License
 
-## Support
+MIT License
 
-[Add support information here]
+---
+
+## 🛠️ Support
+
+If you encounter any bugs or have feature requests, please open an [issue on GitHub](https://github.com/casparjones/rdumper/issues).
+Your feedback helps improve **rDumper** for everyone. 🚀
