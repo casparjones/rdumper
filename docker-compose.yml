@@ -1,0 +1,42 @@
+version: '3.8'
+
+services:
+  rdumper:
+    build: .
+    container_name: rdumper
+    ports:
+      - "3000:3000"
+    volumes:
+      - rdumper_data:/data
+      - ./backups:/data/backups  # For development, mount local backup directory
+    environment:
+      - RUST_LOG=info
+      - DATABASE_URL=sqlite:/data/rdumper.db
+      - BACKUP_DIR=/data/backups
+      - STATIC_DIR=/app/static
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/system"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Optional: MySQL test database for testing backups
+  mysql-test:
+    image: mysql:8.0
+    container_name: mysql-test
+    environment:
+      MYSQL_ROOT_PASSWORD: testpassword
+      MYSQL_DATABASE: testdb
+      MYSQL_USER: testuser
+      MYSQL_PASSWORD: testpass
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    restart: unless-stopped
+
+volumes:
+  rdumper_data:
+  mysql_data:
