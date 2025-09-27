@@ -1,7 +1,7 @@
 Du bist ein erfahrener Fullstack-Entwickler. Bitte implementiere ein Projekt mit folgendem Setup:
 
 ## Projektname
-**DumpTrack** (Rust GUI Wrapper für mydumper/myloader)
+**rDumper** (Rust GUI Wrapper für mydumper/myloader)
 
 ## Technologie-Stack
 - **Frontend**: Vue 3, Tailwind CSS v4, DaisyUI v5
