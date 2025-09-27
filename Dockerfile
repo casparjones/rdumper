@@ -40,9 +40,9 @@ RUN apk add --no-cache \
 
 # Create app user and directories with proper permissions
 RUN adduser -D -s /bin/false rdumper && \
-    mkdir -p /data/backups /app/static && \
+    mkdir -p /data/backups /data/logs /app/static && \
     chown -R rdumper:rdumper /data /app && \
-    chmod 755 /data /data/backups
+    chmod 755 /data /data/backups /data/logs
 
 WORKDIR /app
 
@@ -61,8 +61,9 @@ EXPOSE 3000
 
 # Environment variables
 ENV RUST_LOG=info
-ENV DATABASE_URL=sqlite:/data/rdumper.db
+ENV DATABASE_URL=sqlite:///data/rdumper.db
 ENV BACKUP_DIR=/data/backups
+ENV LOG_DIR=/data/logs
 ENV STATIC_DIR=/app/static
 
 # Health check
@@ -73,6 +74,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 CMD ["./rdumper-backend", \
      "--host", "0.0.0.0", \
      "--port", "3000", \
-     "--database-url", "sqlite:/data/rdumper.db", \
+     "--database-url", "sqlite:///data/rdumper.db", \
      "--backup-dir", "/data/backups", \
+     "--log-dir", "/data/logs", \
      "--static-dir", "/app/static"]
