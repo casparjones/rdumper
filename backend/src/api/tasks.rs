@@ -266,16 +266,63 @@ async fn run_task_now(
             .create_backup_with_progress(&db_config_clone, &task_clone, job_id.clone(), &pool_clone)
             .await;
 
-        if let Err(e) = result {
-            tracing::error!("Backup job {} failed: {}", job_id, e);
-            // Update job status to failed
-            let _ = sqlx::query("UPDATE jobs SET status = ?, error_message = ?, completed_at = ? WHERE id = ?")
-                .bind("failed")
-                .bind(e.to_string())
-                .bind(chrono::Utc::now())
-                .bind(&job_id)
+        match result {
+            Ok(backup_path) => {
+                // Create backup record
+                let backup_request = crate::models::CreateBackupRequest {
+                    database_config_id: db_config_clone.id.clone(),
+                    task_id: Some(task_clone.id.clone()),
+                    file_path: backup_path.clone(),
+                    file_size: std::fs::metadata(&backup_path)
+                        .map(|m| m.len() as i64)
+                        .unwrap_or(0),
+                    compression_type: task_clone.compression_type.clone(),
+                };
+
+                let backup = crate::models::Backup::new(backup_request);
+
+                // Insert backup record
+                if let Err(e) = sqlx::query(
+                    r#"
+                    INSERT INTO backups (id, database_config_id, task_id, file_path, file_size, compression_type, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    "#
+                )
+                .bind(&backup.id)
+                .bind(&backup.database_config_id)
+                .bind(&backup.task_id)
+                .bind(&backup.file_path)
+                .bind(&backup.file_size)
+                .bind(&backup.compression_type)
+                .bind(&backup.created_at)
                 .execute(&pool_clone)
-                .await;
+                .await {
+                    tracing::error!("Failed to create backup record: {}", e);
+                }
+
+                // Update job as completed
+                let _ = sqlx::query("UPDATE jobs SET status = ?, completed_at = ?, progress = ?, backup_path = ? WHERE id = ?")
+                    .bind("completed")
+                    .bind(chrono::Utc::now())
+                    .bind(100)
+                    .bind(&backup_path)
+                    .bind(&job_id)
+                    .execute(&pool_clone)
+                    .await;
+
+                tracing::info!("Backup task {} completed successfully", task_clone.id);
+            }
+            Err(e) => {
+                tracing::error!("Backup job {} failed: {}", job_id, e);
+                // Update job status to failed
+                let _ = sqlx::query("UPDATE jobs SET status = ?, error_message = ?, completed_at = ? WHERE id = ?")
+                    .bind("failed")
+                    .bind(e.to_string())
+                    .bind(chrono::Utc::now())
+                    .bind(&job_id)
+                    .execute(&pool_clone)
+                    .await;
+            }
         }
     });
 

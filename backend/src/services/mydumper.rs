@@ -102,7 +102,6 @@ impl MydumperService {
         let mut stdout_reader = BufReader::new(stdout).lines();
         let mut stderr_reader = BufReader::new(stderr).lines();
 
-        let mut processed_tables = 0;
 
         // Monitor the process output
         loop {
@@ -119,15 +118,8 @@ impl MydumperService {
                             log_file.write_all(log_entry.as_bytes()).await?;
                             log_file.flush().await?;
                             
-                            // Check if this line indicates table processing
-                            if line.contains("Table") && (line.contains("dumping") || line.contains("completed")) {
-                                processed_tables += 1;
-                                let progress = if table_count > 0 {
-                                    ((processed_tables as f64 / table_count as f64) * 100.0) as i32
-                                } else {
-                                    0
-                                };
-                                
+                            // Parse progress from mydumper output
+                            if let Some(progress) = self.parse_mydumper_progress(&line, table_count) {
                                 // Update job progress
                                 self.update_job_progress(pool, &job_id, progress).await?;
                             }
@@ -138,14 +130,43 @@ impl MydumperService {
                 stderr_line = stderr_reader.next_line() => {
                     match stderr_line? {
                         Some(line) => {
-                            warn!("mydumper stderr: {}", line);
-                            
-                            // Write error to log file
-                            let log_entry = format!("[{}] ERROR: {}\n", 
-                                chrono::Utc::now().format("%Y-%m-%d %H:%M:%S"), 
-                                line);
-                            log_file.write_all(log_entry.as_bytes()).await?;
-                            log_file.flush().await?;
+                            // Parse stderr content to determine log level
+                            if line.starts_with("** Message:") {
+                                // These are normal informational messages from mydumper
+                                info!("mydumper: {}", line);
+                                
+                                let log_entry = format!("[{}] INFO: {}\n", 
+                                    chrono::Utc::now().format("%Y-%m-%d %H:%M:%S"), 
+                                    line);
+                                log_file.write_all(log_entry.as_bytes()).await?;
+                                log_file.flush().await?;
+                            } else if line.to_lowercase().contains("error") || 
+                                     line.to_lowercase().contains("failed") || 
+                                     line.to_lowercase().contains("fatal") {
+                                // These are actual errors
+                                error!("mydumper error: {}", line);
+                                
+                                let log_entry = format!("[{}] ERROR: {}\n", 
+                                    chrono::Utc::now().format("%Y-%m-%d %H:%M:%S"), 
+                                    line);
+                                log_file.write_all(log_entry.as_bytes()).await?;
+                                log_file.flush().await?;
+                            } else {
+                                // Other stderr output (warnings, info, etc.)
+                                info!("mydumper: {}", line);
+                                
+                                let log_entry = format!("[{}] INFO: {}\n", 
+                                    chrono::Utc::now().format("%Y-%m-%d %H:%M:%S"), 
+                                    line);
+                                log_file.write_all(log_entry.as_bytes()).await?;
+                                log_file.flush().await?;
+                                
+                                // Also parse progress from stderr
+                                if let Some(progress) = self.parse_mydumper_progress(&line, table_count) {
+                                    // Update job progress
+                                    self.update_job_progress(pool, &job_id, progress).await?;
+                                }
+                            }
                         }
                         None => break,
                     }
@@ -175,8 +196,8 @@ impl MydumperService {
         self.update_job_status(pool, &job_id, "completed", None, Some(&log_file_path)).await?;
         self.update_job_progress(pool, &job_id, 100).await?;
 
-        // Set final backup path in job
-        let final_backup_path = format!("{}/{}", self.backup_base_dir, base_folder);
+        // Compress the backup and clean up temp directory
+        let final_backup_path = self.compress_and_cleanup_backup(&backup_dir, &base_folder, &compression).await?;
         self.update_job_backup_path(pool, &job_id, &final_backup_path).await?;
 
         Ok(final_backup_path)
@@ -402,8 +423,22 @@ impl MydumperService {
                 stderr_line = stderr_reader.next_line() => {
                     match stderr_line? {
                         Some(line) => {
-                            warn!("myloader stderr: {}", line);
-                            output_log.push_str(&format!("ERROR: {}\n", line));
+                            // Parse stderr content to determine log level
+                            if line.starts_with("** Message:") {
+                                // These are normal informational messages from myloader
+                                info!("myloader: {}", line);
+                                output_log.push_str(&format!("INFO: {}\n", line));
+                            } else if line.to_lowercase().contains("error") || 
+                                     line.to_lowercase().contains("failed") || 
+                                     line.to_lowercase().contains("fatal") {
+                                // These are actual errors
+                                error!("myloader error: {}", line);
+                                output_log.push_str(&format!("ERROR: {}\n", line));
+                            } else {
+                                // Other stderr output (warnings, info, etc.)
+                                info!("myloader: {}", line);
+                                output_log.push_str(&format!("INFO: {}\n", line));
+                            }
                         }
                         None => break,
                     }
@@ -551,5 +586,78 @@ impl MydumperService {
             .output()
             .map(|output| output.status.success())
             .unwrap_or(false)
+    }
+
+    async fn compress_and_cleanup_backup(
+        &self,
+        temp_backup_dir: &str,
+        base_folder: &str,
+        compression: &CompressionType,
+    ) -> Result<String> {
+        info!("Compressing backup and cleaning up temp directory");
+
+        // Create the final backup directory (without temp)
+        let final_backup_dir = format!("{}/{}", self.backup_base_dir, base_folder);
+        std::fs::create_dir_all(&final_backup_dir)?;
+
+        // Move all files from temp to final directory
+        if let Ok(entries) = std::fs::read_dir(temp_backup_dir) {
+            for entry in entries {
+                if let Ok(entry) = entry {
+                    let src_path = entry.path();
+                    let dst_path = std::path::Path::new(&final_backup_dir).join(entry.file_name());
+                    
+                    if let Err(e) = std::fs::rename(&src_path, &dst_path) {
+                        warn!("Failed to move file {:?} to {:?}: {}", src_path, dst_path, e);
+                    }
+                }
+            }
+        }
+
+        // Remove the temp directory
+        if let Err(e) = std::fs::remove_dir(temp_backup_dir) {
+            warn!("Failed to remove temp directory {}: {}", temp_backup_dir, e);
+        }
+
+        // Create compressed archive
+        let archive_path = self.create_compressed_archive(&final_backup_dir, compression).await?;
+
+        // Remove the uncompressed directory after successful compression
+        if let Err(e) = std::fs::remove_dir_all(&final_backup_dir) {
+            warn!("Failed to remove uncompressed directory after compression: {}", e);
+        }
+
+        info!("Backup compression and cleanup completed: {}", archive_path);
+        Ok(archive_path)
+    }
+
+    /// Parse mydumper progress from log lines
+    /// Looks for patterns like: `Thread X: \`database\`.\`table\` [ 25% ] | Tables: 5/24`
+    fn parse_mydumper_progress(&self, line: &str, total_tables: u32) -> Option<i32> {
+        // Look for progress pattern: [ XX% ] | Tables: X/Y
+        if let Some(percent_start) = line.find("[ ") {
+            if let Some(percent_end) = line[percent_start + 2..].find("% ]") {
+                let percent_str = &line[percent_start + 2..percent_start + 2 + percent_end];
+                if let Ok(percent) = percent_str.trim().parse::<i32>() {
+                    // Cap at 100% to avoid overflows
+                    return Some(percent.min(100));
+                }
+            }
+        }
+        
+        // Alternative: Look for "Tables: X/Y" pattern to calculate progress
+        if let Some(tables_start) = line.find("Tables: ") {
+            if let Some(tables_end) = line[tables_start + 8..].find("/") {
+                let current_tables_str = &line[tables_start + 8..tables_start + 8 + tables_end];
+                if let Ok(current_tables) = current_tables_str.parse::<u32>() {
+                    if total_tables > 0 {
+                        let progress = ((total_tables - current_tables) as f64 / total_tables as f64 * 100.0) as i32;
+                        return Some(progress.min(100));
+                    }
+                }
+            }
+        }
+        
+        None
     }
 }

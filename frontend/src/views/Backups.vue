@@ -5,7 +5,19 @@
       <p class="text-base-content/70 mt-2">Browse and restore your database backups</p>
     </div>
 
-    <div class="card bg-base-200 shadow-xl">
+    <!-- Loading state -->
+    <div v-if="loading" class="flex justify-center items-center py-8">
+      <span class="loading loading-spinner loading-lg"></span>
+    </div>
+
+    <!-- Error state -->
+    <div v-else-if="error" class="alert alert-error">
+      <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+      <span>{{ error }}</span>
+    </div>
+
+    <!-- Backups table -->
+    <div v-else class="card bg-base-200 shadow-xl">
       <div class="card-body">
         <div class="overflow-x-auto">
           <table class="table">
@@ -20,31 +32,40 @@
               </tr>
             </thead>
             <tbody>
-              <tr>
-                <td>production_20240927_020000</td>
-                <td>Production DB</td>
-                <td>2.3 GB</td>
-                <td>2 hours ago</td>
-                <td><div class="badge badge-info">gzip</div></td>
+              <tr v-for="backup in backups" :key="backup.id">
+                <td>{{ backup.filename || 'Unknown' }}</td>
+                <td>{{ getDatabaseName(backup.database_config_id) }}</td>
+                <td>{{ formatFileSize(backup.file_size) }}</td>
+                <td>{{ formatDate(backup.created_at) }}</td>
                 <td>
-                  <div class="join">
-                    <button class="btn btn-sm btn-primary">Restore</button>
-                    <button class="btn btn-sm btn-ghost">Download</button>
-                    <button class="btn btn-sm btn-error">Delete</button>
-                  </div>
+                  <div class="badge badge-info">{{ backup.compression_type }}</div>
                 </td>
-              </tr>
-              <tr>
-                <td>staging_20240927_010000</td>
-                <td>Staging DB</td>
-                <td>1.8 GB</td>
-                <td>3 hours ago</td>
-                <td><div class="badge badge-info">zstd</div></td>
                 <td>
-                  <div class="join">
-                    <button class="btn btn-sm btn-primary">Restore</button>
-                    <button class="btn btn-sm btn-ghost">Download</button>
-                    <button class="btn btn-sm btn-error">Delete</button>
+                  <div class="flex gap-2">
+                    <button 
+                      class="btn btn-sm btn-ghost btn-square"
+                      @click="openRestoreModal(backup)"
+                      :disabled="restoring"
+                      title="Restore Backup"
+                    >
+                      📥
+                    </button>
+                    <button 
+                      class="btn btn-sm btn-ghost btn-square"
+                      @click="downloadBackup(backup)"
+                      :disabled="downloading"
+                      title="Download Backup"
+                    >
+                      📥
+                    </button>
+                    <button 
+                      class="btn btn-sm btn-ghost btn-square"
+                      @click="deleteBackup(backup)"
+                      :disabled="deleting"
+                      title="Delete Backup"
+                    >
+                      🗑️
+                    </button>
                   </div>
                 </td>
               </tr>
@@ -53,9 +74,226 @@
         </div>
       </div>
     </div>
+
+    <!-- Restore Modal -->
+    <div v-if="showRestoreModal" class="modal modal-open">
+      <div class="modal-box">
+        <h3 class="font-bold text-lg">Restore Backup</h3>
+        <div class="py-4">
+          <div class="form-control w-full">
+            <label class="label">
+              <span class="label-text">Database Name</span>
+            </label>
+            <input 
+              v-model="restoreForm.databaseName"
+              type="text" 
+              placeholder="Enter database name"
+              class="input input-bordered w-full"
+            />
+          </div>
+          <div class="form-control">
+            <label class="label cursor-pointer">
+              <span class="label-text">Overwrite existing database</span>
+              <input 
+                v-model="restoreForm.overwriteExisting"
+                type="checkbox" 
+                class="checkbox"
+              />
+            </label>
+          </div>
+        </div>
+        <div class="modal-action">
+          <button 
+            class="btn btn-primary"
+            @click="confirmRestore"
+            :disabled="restoring"
+          >
+            <span v-if="restoring" class="loading loading-spinner loading-sm"></span>
+            {{ restoring ? 'Restoring...' : 'Restore' }}
+          </button>
+          <button class="btn" @click="closeRestoreModal">Cancel</button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup>
-// TODO: Implement backup management logic
+import { ref, onMounted, computed } from 'vue'
+import { backupsApi, databaseConfigsApi } from '@/composables/api'
+
+// Reactive data
+const loading = ref(false)
+const error = ref(null)
+const backups = ref([])
+const databaseConfigs = ref([])
+const showRestoreModal = ref(false)
+const restoring = ref(false)
+const downloading = ref(false)
+const deleting = ref(false)
+
+// Restore form
+const restoreForm = ref({
+  backupId: null,
+  databaseName: '',
+  overwriteExisting: false
+})
+
+// Computed
+const getDatabaseName = (configId) => {
+  const config = databaseConfigs.value.find(c => c.id === configId)
+  return config ? config.database_name : 'Unknown'
+}
+
+// Methods
+const loadBackups = async () => {
+  try {
+    loading.value = true
+    error.value = null
+    
+    const [backupsResponse, configsResponse] = await Promise.all([
+      backupsApi.list(),
+      databaseConfigsApi.list()
+    ])
+    
+    backups.value = backupsResponse.data || []
+    databaseConfigs.value = configsResponse.data || []
+  } catch (err) {
+    error.value = err.message || 'Failed to load backups'
+    console.error('Error loading backups:', err)
+  } finally {
+    loading.value = false
+  }
+}
+
+const formatFileSize = (bytes) => {
+  if (bytes === 0) return '0 B'
+  const k = 1024
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB']
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
+}
+
+const formatDate = (dateString) => {
+  const date = new Date(dateString)
+  const now = new Date()
+  const diffMs = now - date
+  const diffMins = Math.floor(diffMs / 60000)
+  const diffHours = Math.floor(diffMs / 3600000)
+  const diffDays = Math.floor(diffMs / 86400000)
+  
+  if (diffMins < 60) {
+    return `${diffMins} minutes ago`
+  } else if (diffHours < 24) {
+    return `${diffHours} hours ago`
+  } else if (diffDays < 7) {
+    return `${diffDays} days ago`
+  } else {
+    return date.toLocaleDateString()
+  }
+}
+
+const openRestoreModal = (backup) => {
+  restoreForm.value = {
+    backupId: backup.id,
+    databaseName: '',
+    overwriteExisting: false
+  }
+  showRestoreModal.value = true
+}
+
+const closeRestoreModal = () => {
+  showRestoreModal.value = false
+  restoreForm.value = {
+    backupId: null,
+    databaseName: '',
+    overwriteExisting: false
+  }
+}
+
+const confirmRestore = async () => {
+  try {
+    restoring.value = true
+    
+    const restoreData = {
+      new_database_name: restoreForm.value.databaseName || null,
+      overwrite_existing: restoreForm.value.overwriteExisting
+    }
+    
+    await backupsApi.restore(restoreForm.value.backupId, restoreData)
+    
+    // Show success toast
+    showToast(true, 'Restore job started successfully! 📥')
+    
+    closeRestoreModal()
+  } catch (err) {
+    error.value = err.message || 'Failed to start restore job'
+    showToast(false, 'Failed to start restore job: ' + err.message)
+    console.error('Error starting restore:', err)
+  } finally {
+    restoring.value = false
+  }
+}
+
+const downloadBackup = async (backup) => {
+  try {
+    downloading.value = true
+    
+    await backupsApi.downloadFile(backup.id, backup.filename)
+  } catch (err) {
+    error.value = err.message || 'Failed to download backup'
+    console.error('Error downloading backup:', err)
+  } finally {
+    downloading.value = false
+  }
+}
+
+const deleteBackup = async (backup) => {
+  if (!confirm(`Are you sure you want to delete backup "${backup.filename || backup.id}"?`)) {
+    return
+  }
+  
+  try {
+    deleting.value = true
+    
+    await backupsApi.delete(backup.id)
+    
+    // Remove from local list
+    backups.value = backups.value.filter(b => b.id !== backup.id)
+    
+    // Show success toast
+    showToast(true, 'Backup deleted successfully! 🗑️')
+  } catch (err) {
+    error.value = err.message || 'Failed to delete backup'
+    showToast(false, 'Failed to delete backup: ' + err.message)
+    console.error('Error deleting backup:', err)
+  } finally {
+    deleting.value = false
+  }
+}
+
+// Toast notifications
+const showToast = (success, message) => {
+  const toast = document.createElement('div')
+  toast.className = `alert ${success ? 'alert-success' : 'alert-error'} fixed top-4 right-4 w-auto z-50 shadow-lg`
+  toast.innerHTML = `
+    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="${success ? 'M5 13l4 4L19 7' : 'M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z'}"></path>
+    </svg>
+    <span>${message}</span>
+  `
+  
+  document.body.appendChild(toast)
+  
+  setTimeout(() => {
+    if (toast.parentNode) {
+      toast.parentNode.removeChild(toast)
+    }
+  }, 5000)
+}
+
+// Lifecycle
+onMounted(() => {
+  loadBackups()
+})
 </script>

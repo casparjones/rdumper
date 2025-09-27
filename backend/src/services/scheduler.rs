@@ -261,7 +261,7 @@ async fn execute_backup_task(
     .await?;
 
     // Execute backup
-    match mydumper_service.create_backup(&db_config, &task, Some(job.id.clone())).await {
+    match mydumper_service.create_backup_with_progress(&db_config, &task, job.id.clone(), &pool).await {
         Ok(backup_path) => {
             // Create backup record
             let backup_request = crate::models::CreateBackupRequest {

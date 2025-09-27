@@ -2,10 +2,13 @@ use axum::{
     extract::{Path, Query, State},
     routing::{delete, get, post},
     Json, Router,
+    response::Response,
+    body::Body,
 };
 use serde::Deserialize;
 use sqlx::SqlitePool;
 use std::path::Path as StdPath;
+use tracing::error;
 
 use crate::models::{Backup, CreateBackupRequest, RestoreRequest, Job, CreateJobRequest, JobType};
 use super::{ApiError, ApiResult, success_response, paginated_response};
@@ -186,12 +189,15 @@ async fn delete_backup(
 
     let backup = backup.ok_or_else(|| ApiError::NotFound("Backup not found".to_string()))?;
 
-    // Delete the actual backup file
+    // Delete the actual backup file and related directories
     if StdPath::new(&backup.file_path).exists() {
         if let Err(e) = std::fs::remove_file(&backup.file_path) {
             tracing::warn!("Failed to delete backup file {}: {}", backup.file_path, e);
         }
     }
+
+    // Note: Log files are deleted when the associated job is deleted
+    // This ensures proper cleanup and avoids orphaned log files
 
     // Delete from database
     let result = sqlx::query("DELETE FROM backups WHERE id = ?")
@@ -268,25 +274,99 @@ async fn restore_backup(
     .execute(&pool)
     .await?;
 
-    // TODO: Start the actual restore process using myloader
+    // Start the actual restore process using myloader
+    let pool_clone = pool.clone();
+    let mydumper_service = crate::services::MydumperService::new(
+        std::env::var("BACKUP_BASE_DIR").unwrap_or_else(|_| "backend/data/backups".to_string()),
+        std::env::var("LOG_BASE_DIR").unwrap_or_else(|_| "backend/data/logs".to_string()),
+    );
+
+    // Get target database config
+    let target_config: crate::models::DatabaseConfig = sqlx::query_as(
+        "SELECT * FROM database_configs WHERE id = ?"
+    )
+    .bind(&target_config_id)
+    .fetch_one(&pool)
+    .await?;
+
+    // Generate new database name if requested
+    let new_database_name = if let Some(new_name) = req.new_database_name {
+        Some(new_name)
+    } else if req.overwrite_existing {
+        None
+    } else {
+        // Generate a new name with hash
+        let hash = &backup.id[..5];
+        Some(format!("{}_{}", target_config.database_name, hash))
+    };
+
+    // Clone job.id before moving into async closure
+    let job_id = job.id.clone();
+    let backup_id = backup.id.clone();
+    let job_id_for_async = job_id.clone();
+
+    // Start restore process asynchronously
+    tokio::spawn(async move {
+        // Update job status to running
+        let _ = sqlx::query(
+            "UPDATE jobs SET status = ?, started_at = ? WHERE id = ?"
+        )
+        .bind("running")
+        .bind(chrono::Utc::now())
+        .bind(&job_id_for_async)
+        .execute(&pool_clone)
+        .await;
+
+        if let Err(e) = mydumper_service.restore_backup(
+            &target_config,
+            &backup.file_path,
+            new_database_name.as_deref(),
+            req.overwrite_existing,
+        ).await {
+            error!("Restore failed: {}", e);
+            
+            // Update job status to failed
+            let _ = sqlx::query(
+                "UPDATE jobs SET status = ?, error_message = ?, completed_at = ? WHERE id = ?"
+            )
+            .bind("failed")
+            .bind(e.to_string())
+            .bind(chrono::Utc::now())
+            .bind(&job_id_for_async)
+            .execute(&pool_clone)
+            .await;
+        } else {
+            // Update job status to completed
+            let _ = sqlx::query(
+                "UPDATE jobs SET status = ?, completed_at = ?, progress = ? WHERE id = ?"
+            )
+            .bind("completed")
+            .bind(chrono::Utc::now())
+            .bind(100)
+            .bind(&job_id_for_async)
+            .execute(&pool_clone)
+            .await;
+        }
+    });
 
     Ok(success_response(serde_json::json!({
         "message": "Restore job created successfully",
-        "job_id": job.id,
-        "backup_id": backup.id
+        "job_id": job_id,
+        "backup_id": backup_id
     })))
 }
 
 async fn download_backup(
     State(pool): State<SqlitePool>,
     Path(id): Path<String>,
-) -> ApiResult<impl axum::response::IntoResponse> {
+) -> Result<Response<Body>, ApiError> {
     let backup: Option<Backup> = sqlx::query_as(
         "SELECT * FROM backups WHERE id = ?"
     )
     .bind(&id)
     .fetch_optional(&pool)
-    .await?;
+    .await
+    .map_err(|e| ApiError::InternalError(format!("Database error: {}", e)))?;
 
     let backup = backup.ok_or_else(|| ApiError::NotFound("Backup not found".to_string()))?;
 
@@ -294,14 +374,26 @@ async fn download_backup(
         return Err(ApiError::NotFound("Backup file not found on disk".to_string()));
     }
 
-    // TODO: Implement file download endpoint
-    // For now, return file information
-    Ok(success_response(serde_json::json!({
-        "message": "Download endpoint not yet implemented",
-        "file_path": backup.file_path,
-        "file_size": backup.file_size,
-        "filename": backup.filename()
-    })))
+    // Read the file and return it as a download
+    let file_content = tokio::fs::read(&backup.file_path).await
+        .map_err(|_| ApiError::InternalError("Failed to read backup file".to_string()))?;
+
+    let filename = backup.filename().unwrap_or("backup.tar.gz");
+    let mime_type = if backup.file_path.ends_with(".tar.gz") {
+        "application/gzip"
+    } else if backup.file_path.ends_with(".tar.zst") {
+        "application/zstd"
+    } else {
+        "application/octet-stream"
+    };
+
+    Ok(Response::builder()
+        .status(200)
+        .header("Content-Type", mime_type)
+        .header("Content-Disposition", format!("attachment; filename=\"{}\"", filename))
+        .header("Content-Length", backup.file_size.to_string())
+        .body(Body::from(file_content))
+        .unwrap())
 }
 
 async fn cleanup_old_backups(

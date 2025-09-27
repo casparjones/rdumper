@@ -166,12 +166,41 @@ export const backupsApi = {
     return apiClient.get('/api/backups', params)
   },
 
+  get(id) {
+    return apiClient.get(`/api/backups/${id}`)
+  },
+
   restore(id, data) {
     return apiClient.post(`/api/backups/${id}/restore`, data)
   },
 
+  async download(id) {
+    const response = await fetch(`${apiClient.baseUrl}/api/backups/${id}/download`)
+    if (!response.ok) {
+      throw new Error(`Download failed: ${response.status}`)
+    }
+    return response
+  },
+
+  async downloadFile(id, filename) {
+    const response = await this.download(id)
+    const blob = await response.blob()
+    const url = window.URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename || 'backup.tar.gz'
+    document.body.appendChild(a)
+    a.click()
+    window.URL.revokeObjectURL(url)
+    document.body.removeChild(a)
+  },
+
   delete(id) {
     return apiClient.delete(`/api/backups/${id}`)
+  },
+
+  cleanup(days = 30) {
+    return apiClient.post('/api/backups/cleanup', { days })
   }
 }
 

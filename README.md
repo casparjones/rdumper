@@ -152,6 +152,17 @@ docker run -d \
 
 ---
 
+## 👥 Authors
+
+- **Frank** - Project Owner & Lead Developer
+- **Claude (Anthropic)** - AI Assistant & Code Contributor
+- **ChatGPT (OpenAI)** - AI Assistant & Code Contributor
+
+*“Give credit where credit is due.”*  
+*“Honor should be given to whom honor is due.”* 😊
+
+---
+
 ## 🤝 Contributing
 
 1. Fork this repository

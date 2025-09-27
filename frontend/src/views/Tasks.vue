@@ -57,7 +57,7 @@
                 </td>
                 <td>
                   <div class="font-medium">{{ getDatabaseName(task.database_config_id) }}</div>
-                  <div class="text-sm text-base-content/70">{{ task.database_config_id.slice(0, 8) }}...</div>
+                  <div class="text-sm text-base-content/70">{{ getDatabaseDetails(task.database_config_id) }}</div>
                 </td>
                 <td>
                   <code class="text-sm bg-base-300 px-2 py-1 rounded">{{ task.cron_schedule }}</code>
@@ -72,17 +72,17 @@
                   </div>
                 </td>
                 <td>
-                  <div class="join">
+                  <div class="flex gap-2">
                     <button 
                       @click="editTask(task)" 
-                      class="btn btn-sm btn-ghost"
+                      class="btn btn-sm btn-ghost btn-square"
                       title="Edit Task"
                     >
                       ✏️
                     </button>
                     <button 
                       @click="runTaskNow(task.id)" 
-                      class="btn btn-sm btn-warning"
+                      class="btn btn-sm btn-ghost btn-square"
                       :disabled="runningTask === task.id"
                       title="Run Now"
                     >
@@ -91,7 +91,7 @@
                     </button>
                     <button 
                       @click="deleteTask(task.id)" 
-                      class="btn btn-sm btn-error"
+                      class="btn btn-sm btn-ghost btn-square"
                       title="Delete Task"
                     >
                       🗑️
@@ -213,7 +213,11 @@
 
 <script setup>
 import { ref, onMounted, computed } from 'vue'
+import { useRouter } from 'vue-router'
 import { tasksApi, databaseConfigsApi } from '@/composables/api.js'
+
+// Router
+const router = useRouter()
 
 // State management
 const tasks = ref([])
@@ -346,16 +350,16 @@ const saveTask = async () => {
 }
 
 const runTaskNow = async (taskId) => {
-  if (!confirm('Are you sure you want to run this backup task now? 🚀')) {
-    return
-  }
-
   try {
     runningTask.value = taskId
+    
+    // Navigate to jobs page immediately
+    router.push('/jobs')
+    
     const response = await tasksApi.run(taskId)
     
     if (response.success) {
-      showToast(true, 'Backup task started! ▶️ Check the Jobs page for progress.')
+      showToast(true, 'Backup task started! ▶️ Redirecting to Jobs page...')
     } else {
       throw new Error('Failed to start task')
     }
@@ -391,6 +395,12 @@ const deleteTask = async (taskId) => {
 const getDatabaseName = (configId) => {
   const config = databaseConfigs.value.find(c => c.id === configId)
   return config ? config.name : 'Unknown Database'
+}
+
+const getDatabaseDetails = (configId) => {
+  const config = databaseConfigs.value.find(c => c.id === configId)
+  if (!config) return 'Unknown Database'
+  return `${config.database_name} @ ${config.host}:${config.port}`
 }
 
 const formatSchedule = (cronSchedule) => {

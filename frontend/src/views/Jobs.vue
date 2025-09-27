@@ -38,61 +38,16 @@
       <button @click="refreshJobs" class="btn btn-sm">🔄 Retry</button>
     </div>
 
-    <!-- Empty State -->
-    <div v-else-if="jobs.length === 0" class="text-center py-12">
-      <div class="text-6xl mb-4">📊</div>
-      <h3 class="text-lg font-semibold text-base-content/70 mb-2">No jobs found</h3>
-      <p class="text-base-content/50 mb-4">
-        {{ statusFilter ? `No ${statusFilter} jobs at the moment.` : 'No backup or restore jobs have been executed yet.' }}
-      </p>
-      <button v-if="!statusFilter" @click="$router.push('/tasks')" class="btn btn-primary">📋 Create Your First Task</button>
-    </div>
-
-    <!-- Active Jobs Section -->
-    <div v-else-if="activeJobs.length > 0" class="mb-8">
-      <h2 class="text-xl font-bold mb-4 flex items-center">
-        <span class="mr-2">⚡</span>
-        Active Jobs
-        <div class="badge badge-warning ml-2">{{ activeJobs.length }}</div>
-      </h2>
-      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
-        <div v-for="job in activeJobs" :key="job.id" class="card bg-base-300 shadow-lg border-l-4 border-warning">
-          <div class="card-body">
-            <div class="flex justify-between items-start">
-              <div>
-                <h3 class="font-bold">{{ getJobTypeIcon(job.job_type) }} {{ formatJobType(job.job_type) }}</h3>
-                <p class="text-sm text-base-content/70">{{ getTaskName(job.task_id) || 'Manual Job' }}</p>
-                <p class="text-xs text-base-content/50 mt-1">{{ job.id.slice(0, 8) }}...</p>
-              </div>
-              <div class="text-right">
-                <div class="radial-progress text-warning mb-2" :style="`--value:${job.progress}`">{{ job.progress }}%</div>
-                <div class="text-xs text-base-content/70">{{ formatDuration(job.started_at) }}</div>
-              </div>
-            </div>
-            <div class="card-actions justify-end mt-4">
-              <button 
-                @click="cancelJob(job.id)" 
-                class="btn btn-sm btn-error" 
-                :disabled="cancellingJob === job.id"
-                title="Cancel Job"
-              >
-                <span v-if="cancellingJob === job.id" class="loading loading-spinner loading-xs"></span>
-                <span v-else>🛑</span>
-                Cancel
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Jobs History Table -->
-    <div class="card bg-base-200 shadow-xl">
+    <!-- Jobs Table -->
+    <div v-else class="card bg-base-200 shadow-xl">
       <div class="card-body">
         <h2 class="card-title mb-4 flex items-center">
           <span class="mr-2">📋</span>
           {{ statusFilter ? `${formatJobType(statusFilter)} Jobs` : 'All Jobs' }}
           <div class="badge badge-outline ml-2">{{ jobs.length }}</div>
+          <div v-if="activeJobs.length > 0" class="badge badge-warning ml-2">
+            ⚡ {{ activeJobs.length }} Active
+          </div>
         </h2>
         <div class="overflow-x-auto">
           <table class="table">
@@ -109,7 +64,14 @@
               </tr>
             </thead>
             <tbody>
-              <tr v-for="job in jobs" :key="job.id">
+              <tr 
+                v-for="job in jobs" 
+                :key="job.id" 
+                :class="{
+                  'bg-warning/10 border-l-4 border-warning': job.status === 'running' || job.status === 'pending'
+                }"
+                class="transition-all duration-200 ease-in-out"
+              >
                 <td>
                   <div class="font-mono text-sm">{{ job.id.slice(0, 8) }}...</div>
                   <div class="text-xs text-base-content/50">{{ formatDate(job.created_at) }}</div>
@@ -130,7 +92,7 @@
                   </div>
                 </td>
                 <td>
-                  <div class="radial-progress" :class="getProgressClass(job.status)" :style="`--value:${job.progress}`">
+                  <div class="radial-progress transition-all duration-300 ease-out" :class="getProgressClass(job.status)" :style="`--value:${job.progress}`">
                     {{ job.progress }}%
                   </div>
                 </td>
@@ -146,7 +108,7 @@
                     <button 
                       v-if="job.status === 'running' || job.status === 'pending'"
                       @click="cancelJob(job.id)" 
-                      class="btn btn-xs btn-error" 
+                      class="btn btn-xs btn-ghost" 
                       :disabled="cancellingJob === job.id"
                       title="Cancel Job"
                     >
@@ -168,7 +130,7 @@
                     <button 
                       v-if="job.status !== 'running' && job.status !== 'pending'"
                       @click="deleteJob(job.id)" 
-                      class="btn btn-xs btn-error btn-outline"
+                      class="btn btn-xs btn-ghost"
                       title="Delete Job"
                     >
                       🗑️
@@ -263,9 +225,11 @@ const activeJobs = computed(() => {
 })
 
 // Load data functions
-const loadJobs = async () => {
+const loadJobs = async (isInitialLoad = false) => {
   try {
-    loading.value = true
+    if (isInitialLoad) {
+      loading.value = true
+    }
     error.value = null
     
     const params = {}
@@ -284,7 +248,9 @@ const loadJobs = async () => {
     console.error('Error loading jobs:', err)
     error.value = err.message
   } finally {
-    loading.value = false
+    if (isInitialLoad) {
+      loading.value = false
+    }
   }
 }
 
@@ -311,11 +277,11 @@ const loadDatabaseConfigs = async () => {
 }
 
 const refreshJobs = async () => {
-  await loadJobs()
+  await loadJobs(true) // Initial load with loading state
 }
 
 const applyFilter = () => {
-  loadJobs()
+  loadJobs(true) // Initial load with loading state
 }
 
 // Job operations
@@ -407,7 +373,7 @@ const getDatabaseForJob = (job) => {
   if (!task) return null
   
   const config = databaseConfigs.value.find(c => c.id === task.database_config_id)
-  return config ? config.name : null
+  return config ? `${config.name} (${config.database_name})` : null
 }
 
 const getJobTypeIcon = (type) => {
@@ -532,23 +498,27 @@ const showToast = (success, message) => {
 
 // Auto-refresh for active jobs
 const startAutoRefresh = () => {
-  refreshInterval = setInterval(() => {
-    if (activeJobs.value.length > 0) {
-      loadJobs()
+  const refresh = () => {
+    loadJobs(false) // Silent refresh without loading state
+    // Restart with appropriate interval based on current active jobs
+    if (refreshInterval) {
+      clearInterval(refreshInterval)
     }
-  }, 5000) // Refresh every 5 seconds if there are active jobs
+    refreshInterval = setTimeout(refresh, activeJobs.value.length > 0 ? 1000 : 5000)
+  }
+  refresh() // Start immediately
 }
 
 const stopAutoRefresh = () => {
   if (refreshInterval) {
-    clearInterval(refreshInterval)
+    clearTimeout(refreshInterval)
     refreshInterval = null
   }
 }
 
 // Lifecycle
 onMounted(async () => {
-  await Promise.all([loadJobs(), loadTasks(), loadDatabaseConfigs()])
+  await Promise.all([loadJobs(true), loadTasks(), loadDatabaseConfigs()])
   startAutoRefresh()
 })
 

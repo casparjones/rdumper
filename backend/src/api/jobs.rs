@@ -149,6 +149,8 @@ async fn delete_job(
     State(pool): State<SqlitePool>,
     Path(id): Path<String>,
 ) -> ApiResult<impl axum::response::IntoResponse> {
+    use std::path::Path as StdPath;
+    
     // Check if job exists and is not running
     let job: Option<Job> = sqlx::query_as(
         "SELECT * FROM jobs WHERE id = ?"
@@ -162,6 +164,35 @@ async fn delete_job(
     // Don't allow deletion of running jobs
     if job.status().unwrap_or(JobStatus::Failed) == JobStatus::Running {
         return Err(ApiError::BadRequest("Cannot delete a running job. Cancel it first.".to_string()));
+    }
+
+    // Delete the log file if it exists
+    if let Some(log_output) = &job.log_output {
+        if StdPath::new(log_output).exists() {
+            if let Err(e) = std::fs::remove_file(log_output) {
+                tracing::warn!("Failed to delete log file {}: {}", log_output, e);
+            }
+        }
+        
+        // Also try to delete the log directory if it's empty
+        if let Some(log_dir) = StdPath::new(log_output).parent() {
+            if log_dir.exists() && log_dir.is_dir() {
+                // Only delete if directory is empty (safe operation)
+                if let Ok(entries) = std::fs::read_dir(log_dir) {
+                    if entries.count() == 0 {
+                        if let Err(e) = std::fs::remove_dir(log_dir) {
+                            tracing::warn!("Failed to delete empty log directory {:?}: {}", log_dir, e);
+                        }
+                    } else {
+                        // Directory is not empty, but we can still try to delete the entire directory
+                        // since it belongs to this specific job
+                        if let Err(e) = std::fs::remove_dir_all(log_dir) {
+                            tracing::warn!("Failed to delete log directory {:?}: {}", log_dir, e);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     let result = sqlx::query("DELETE FROM jobs WHERE id = ?")
