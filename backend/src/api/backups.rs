@@ -1,0 +1,359 @@
+use axum::{
+    extract::{Path, Query, State},
+    routing::{delete, get, post},
+    Json, Router,
+};
+use serde::Deserialize;
+use sqlx::SqlitePool;
+use std::path::Path as StdPath;
+
+use crate::models::{Backup, CreateBackupRequest, RestoreRequest, Job, CreateJobRequest, JobType};
+use super::{ApiError, ApiResult, success_response, paginated_response};
+
+#[derive(Deserialize)]
+pub struct ListQuery {
+    page: Option<u32>,
+    limit: Option<u32>,
+    database_config_id: Option<String>,
+    task_id: Option<String>,
+}
+
+pub fn routes(pool: SqlitePool) -> Router {
+    Router::new()
+        .route("/", get(list_backups).post(create_backup))
+        .route("/:id", get(get_backup).delete(delete_backup))
+        .route("/:id/restore", post(restore_backup))
+        .route("/:id/download", get(download_backup))
+        .route("/cleanup", post(cleanup_old_backups))
+        .with_state(pool)
+}
+
+async fn list_backups(
+    State(pool): State<SqlitePool>,
+    Query(query): Query<ListQuery>,
+) -> ApiResult<impl axum::response::IntoResponse> {
+    let page = query.page.unwrap_or(1);
+    let limit = query.limit.unwrap_or(10);
+    let offset = (page - 1) * limit;
+
+    let mut sql = "SELECT * FROM backups".to_string();
+    let mut count_sql = "SELECT COUNT(*) as count FROM backups".to_string();
+    let mut conditions = Vec::new();
+    
+    if query.database_config_id.is_some() {
+        conditions.push("database_config_id = ?");
+    }
+    
+    if query.task_id.is_some() {
+        conditions.push("task_id = ?");
+    }
+    
+    if !conditions.is_empty() {
+        let where_clause = format!(" WHERE {}", conditions.join(" AND "));
+        sql.push_str(&where_clause);
+        count_sql.push_str(&where_clause);
+    }
+    
+    sql.push_str(&format!(" ORDER BY created_at DESC LIMIT {} OFFSET {}", limit, offset));
+
+    let mut query_builder = sqlx::query_as(&sql);
+    let mut count_query_builder = sqlx::query_as(&count_sql);
+    
+    if let Some(ref db_config_id) = query.database_config_id {
+        query_builder = query_builder.bind(db_config_id);
+        count_query_builder = count_query_builder.bind(db_config_id);
+    }
+    
+    if let Some(ref task_id) = query.task_id {
+        query_builder = query_builder.bind(task_id);
+        count_query_builder = count_query_builder.bind(task_id);
+    }
+
+    let mut backups: Vec<Backup> = query_builder.fetch_all(&pool).await?;
+    
+    // Check if backup files still exist and update file sizes
+    for backup in &mut backups {
+        if let Ok(metadata) = std::fs::metadata(&backup.file_path) {
+            if backup.file_size != metadata.len() as i64 {
+                // Update file size in database if it has changed
+                let _ = sqlx::query(
+                    "UPDATE backups SET file_size = ? WHERE id = ?"
+                )
+                .bind(metadata.len() as i64)
+                .bind(&backup.id)
+                .execute(&pool)
+                .await;
+                
+                backup.file_size = metadata.len() as i64;
+            }
+        }
+    }
+    
+    let total: (i64,) = count_query_builder.fetch_one(&pool).await?;
+
+    Ok(paginated_response(backups, page, limit, total.0 as u64))
+}
+
+async fn get_backup(
+    State(pool): State<SqlitePool>,
+    Path(id): Path<String>,
+) -> ApiResult<impl axum::response::IntoResponse> {
+    let backup: Option<Backup> = sqlx::query_as(
+        "SELECT * FROM backups WHERE id = ?"
+    )
+    .bind(&id)
+    .fetch_optional(&pool)
+    .await?;
+
+    match backup {
+        Some(mut backup) => {
+            // Check if file still exists and update size
+            if let Ok(metadata) = std::fs::metadata(&backup.file_path) {
+                backup.file_size = metadata.len() as i64;
+            }
+            Ok(success_response(backup))
+        },
+        None => Err(ApiError::NotFound("Backup not found".to_string())),
+    }
+}
+
+async fn create_backup(
+    State(pool): State<SqlitePool>,
+    Json(req): Json<CreateBackupRequest>,
+) -> ApiResult<impl axum::response::IntoResponse> {
+    // Validate that database config exists
+    let db_config_exists: Option<(String,)> = sqlx::query_as(
+        "SELECT id FROM database_configs WHERE id = ?"
+    )
+    .bind(&req.database_config_id)
+    .fetch_optional(&pool)
+    .await?;
+
+    if db_config_exists.is_none() {
+        return Err(ApiError::BadRequest("Database configuration not found".to_string()));
+    }
+
+    // Validate that task exists if provided
+    if let Some(ref task_id) = req.task_id {
+        let task_exists: Option<(String,)> = sqlx::query_as(
+            "SELECT id FROM tasks WHERE id = ?"
+        )
+        .bind(task_id)
+        .fetch_optional(&pool)
+        .await?;
+
+        if task_exists.is_none() {
+            return Err(ApiError::BadRequest("Task not found".to_string()));
+        }
+    }
+
+    // Validate that backup file exists
+    if !StdPath::new(&req.file_path).exists() {
+        return Err(ApiError::BadRequest("Backup file does not exist".to_string()));
+    }
+
+    let backup = Backup::new(req);
+
+    sqlx::query(
+        r#"
+        INSERT INTO backups (id, database_config_id, task_id, file_path, file_size, compression_type, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        "#
+    )
+    .bind(&backup.id)
+    .bind(&backup.database_config_id)
+    .bind(&backup.task_id)
+    .bind(&backup.file_path)
+    .bind(&backup.file_size)
+    .bind(&backup.compression_type)
+    .bind(&backup.created_at)
+    .execute(&pool)
+    .await?;
+
+    Ok(success_response(backup))
+}
+
+async fn delete_backup(
+    State(pool): State<SqlitePool>,
+    Path(id): Path<String>,
+) -> ApiResult<impl axum::response::IntoResponse> {
+    let backup: Option<Backup> = sqlx::query_as(
+        "SELECT * FROM backups WHERE id = ?"
+    )
+    .bind(&id)
+    .fetch_optional(&pool)
+    .await?;
+
+    let backup = backup.ok_or_else(|| ApiError::NotFound("Backup not found".to_string()))?;
+
+    // Delete the actual backup file
+    if StdPath::new(&backup.file_path).exists() {
+        if let Err(e) = std::fs::remove_file(&backup.file_path) {
+            tracing::warn!("Failed to delete backup file {}: {}", backup.file_path, e);
+        }
+    }
+
+    // Delete from database
+    let result = sqlx::query("DELETE FROM backups WHERE id = ?")
+        .bind(&id)
+        .execute(&pool)
+        .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(ApiError::NotFound("Backup not found".to_string()));
+    }
+
+    Ok(success_response(serde_json::json!({"message": "Backup deleted successfully"})))
+}
+
+async fn restore_backup(
+    State(pool): State<SqlitePool>,
+    Path(id): Path<String>,
+    Json(req): Json<RestoreRequest>,
+) -> ApiResult<impl axum::response::IntoResponse> {
+    // Validate backup exists
+    let backup: Option<Backup> = sqlx::query_as(
+        "SELECT * FROM backups WHERE id = ?"
+    )
+    .bind(&id)
+    .fetch_optional(&pool)
+    .await?;
+
+    let backup = backup.ok_or_else(|| ApiError::NotFound("Backup not found".to_string()))?;
+
+    // Validate backup file exists
+    if !StdPath::new(&backup.file_path).exists() {
+        return Err(ApiError::BadRequest("Backup file no longer exists".to_string()));
+    }
+
+    // Validate target database config if specified
+    let target_config_id = req.target_database_config_id.unwrap_or(backup.database_config_id.clone());
+    let target_config_exists: Option<(String,)> = sqlx::query_as(
+        "SELECT id FROM database_configs WHERE id = ?"
+    )
+    .bind(&target_config_id)
+    .fetch_optional(&pool)
+    .await?;
+
+    if target_config_exists.is_none() {
+        return Err(ApiError::BadRequest("Target database configuration not found".to_string()));
+    }
+
+    // Create a restore job
+    let job_request = CreateJobRequest {
+        task_id: None,
+        job_type: JobType::Restore,
+        backup_path: Some(backup.file_path.clone()),
+    };
+
+    let job = Job::new(job_request);
+
+    sqlx::query(
+        r#"
+        INSERT INTO jobs (id, task_id, job_type, status, progress, started_at, completed_at, error_message, log_output, backup_path, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        "#
+    )
+    .bind(&job.id)
+    .bind(&job.task_id)
+    .bind(&job.job_type)
+    .bind(&job.status)
+    .bind(&job.progress)
+    .bind(&job.started_at)
+    .bind(&job.completed_at)
+    .bind(&job.error_message)
+    .bind(&job.log_output)
+    .bind(&job.backup_path)
+    .bind(&job.created_at)
+    .execute(&pool)
+    .await?;
+
+    // TODO: Start the actual restore process using myloader
+
+    Ok(success_response(serde_json::json!({
+        "message": "Restore job created successfully",
+        "job_id": job.id,
+        "backup_id": backup.id
+    })))
+}
+
+async fn download_backup(
+    State(pool): State<SqlitePool>,
+    Path(id): Path<String>,
+) -> ApiResult<impl axum::response::IntoResponse> {
+    let backup: Option<Backup> = sqlx::query_as(
+        "SELECT * FROM backups WHERE id = ?"
+    )
+    .bind(&id)
+    .fetch_optional(&pool)
+    .await?;
+
+    let backup = backup.ok_or_else(|| ApiError::NotFound("Backup not found".to_string()))?;
+
+    if !StdPath::new(&backup.file_path).exists() {
+        return Err(ApiError::NotFound("Backup file not found on disk".to_string()));
+    }
+
+    // TODO: Implement file download endpoint
+    // For now, return file information
+    Ok(success_response(serde_json::json!({
+        "message": "Download endpoint not yet implemented",
+        "file_path": backup.file_path,
+        "file_size": backup.file_size,
+        "filename": backup.filename()
+    })))
+}
+
+async fn cleanup_old_backups(
+    State(pool): State<SqlitePool>,
+    Query(query): Query<serde_json::Value>,
+) -> ApiResult<impl axum::response::IntoResponse> {
+    let days = query.get("days")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(30) as i64;
+
+    let cutoff_date = chrono::Utc::now() - chrono::Duration::days(days);
+
+    // Get old backups to delete
+    let old_backups: Vec<Backup> = sqlx::query_as(
+        "SELECT * FROM backups WHERE created_at < ?"
+    )
+    .bind(&cutoff_date)
+    .fetch_all(&pool)
+    .await?;
+
+    let mut deleted_count = 0;
+    let mut failed_deletions = Vec::new();
+
+    for backup in old_backups {
+        // Delete the actual file
+        if StdPath::new(&backup.file_path).exists() {
+            if let Err(e) = std::fs::remove_file(&backup.file_path) {
+                tracing::warn!("Failed to delete backup file {}: {}", backup.file_path, e);
+                failed_deletions.push(backup.id.clone());
+                continue;
+            }
+        }
+
+        // Delete from database
+        let result = sqlx::query("DELETE FROM backups WHERE id = ?")
+            .bind(&backup.id)
+            .execute(&pool)
+            .await;
+
+        match result {
+            Ok(_) => deleted_count += 1,
+            Err(e) => {
+                tracing::error!("Failed to delete backup {} from database: {}", backup.id, e);
+                failed_deletions.push(backup.id);
+            }
+        }
+    }
+
+    Ok(success_response(serde_json::json!({
+        "message": format!("Cleanup completed. {} backups deleted.", deleted_count),
+        "deleted_count": deleted_count,
+        "failed_deletions": failed_deletions,
+        "cutoff_date": cutoff_date.to_rfc3339()
+    })))
+}

@@ -1,0 +1,35 @@
+# Rust
+backend/target/*
+backend/data/*
+
+# Node.js
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Documentation
+*.md
+!README.md
+
+# Development files
+.env
+.env.local
+docker-compose.yml
+docker-compose.*.yml
