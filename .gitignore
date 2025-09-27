@@ -30,3 +30,6 @@ coverage
 *.tsbuildinfo
 backend/target/*
 backend/data/*
+!backend/backups/.gitkeep
+!backend/db/.gitkeep
+!backend/logs/.gitkeep
