@@ -123,50 +123,50 @@ impl Job {
         }
     }
 
-    pub fn start(&mut self) {
-        self.status = JobStatus::Running.to_string();
-        self.started_at = Some(Utc::now());
-    }
+    // pub fn start(&mut self) {
+    //     self.status = JobStatus::Running.to_string();
+    //     self.started_at = Some(Utc::now());
+    // }
 
-    pub fn complete(&mut self) {
-        self.status = JobStatus::Completed.to_string();
-        self.completed_at = Some(Utc::now());
-        self.progress = 100;
-    }
+    // pub fn complete(&mut self) {
+    //     self.status = JobStatus::Completed.to_string();
+    //     self.completed_at = Some(Utc::now());
+    //     self.progress = 100;
+    // }
 
-    pub fn fail(&mut self, error: String) {
-        self.status = JobStatus::Failed.to_string();
-        self.completed_at = Some(Utc::now());
-        self.error_message = Some(error);
-    }
+    // pub fn fail(&mut self, error: String) {
+    //     self.status = JobStatus::Failed.to_string();
+    //     self.completed_at = Some(Utc::now());
+    //     self.error_message = Some(error);
+    // }
 
-    pub fn update_progress(&mut self, progress: i32) {
-        self.progress = progress.clamp(0, 100);
-    }
+    // pub fn update_progress(&mut self, progress: i32) {
+    //     self.progress = progress.clamp(0, 100);
+    // }
 
-    pub fn append_log(&mut self, log: &str) {
-        match &self.log_output {
-            Some(existing) => {
-                self.log_output = Some(format!("{}\n{}", existing, log));
-            }
-            None => {
-                self.log_output = Some(log.to_string());
-            }
-        }
-    }
+    // pub fn append_log(&mut self, log: &str) {
+    //     match &self.log_output {
+    //         Some(existing) => {
+    //             self.log_output = Some(format!("{}\n{}", existing, log));
+    //         }
+    //         None => {
+    //             self.log_output = Some(log.to_string());
+    //         }
+    //     }
+    // }
 
-    pub fn job_type(&self) -> Result<JobType, String> {
-        self.job_type.parse()
-    }
+    // pub fn job_type(&self) -> Result<JobType, String> {
+    //     self.job_type.parse()
+    // }
 
     pub fn status(&self) -> Result<JobStatus, String> {
         self.status.parse()
     }
 
-    pub fn duration(&self) -> Option<chrono::Duration> {
-        match (self.started_at, self.completed_at) {
-            (Some(start), Some(end)) => Some(end - start),
-            _ => None,
-        }
-    }
+    // pub fn duration(&self) -> Option<chrono::Duration> {
+    //     match (self.started_at, self.completed_at) {
+    //         (Some(start), Some(end)) => Some(end - start),
+    //         _ => None,
+    //     }
+    // }
 }

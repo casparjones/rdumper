@@ -74,10 +74,10 @@ impl DatabaseConfig {
         self.updated_at = Utc::now();
     }
 
-    pub fn connection_string(&self) -> String {
-        format!(
-            "mysql://{}:{}@{}:{}/{}",
-            self.username, self.password, self.host, self.port, self.database_name
-        )
-    }
+    // pub fn connection_string(&self) -> String {
+    //     format!(
+    //         "mysql://{}:{}@{}:{}/{}",
+    //         self.username, self.password, self.host, self.port, self.database_name
+    //     )
+    // }
 }

@@ -1,13 +1,13 @@
 use anyhow::{anyhow, Result};
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, BufReader, AsyncWriteExt};
 use tokio::process::Command as TokioCommand;
 use tokio::fs::File;
 use tracing::{error, info, warn};
-use sqlx::{SqlitePool, MySqlPool, Row};
+use sqlx::{SqlitePool, MySqlPool};
 
-use crate::models::{DatabaseConfig, Task, CompressionType, Job, JobType, CreateJobRequest, Backup, CreateBackupRequest};
+use crate::models::{DatabaseConfig, Task, CompressionType};
 
 pub struct MydumperService {
     backup_base_dir: String,
@@ -204,18 +204,18 @@ impl MydumperService {
     }
 
     // Keep the original backup method for compatibility
-    pub async fn create_backup(
-        &self,
-        database_config: &DatabaseConfig,
-        task: &Task,
-        job_id: Option<String>,
-    ) -> Result<String> {
-        // For backward compatibility, use a dummy job id if none provided
-        let job_id = job_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-        
-        // This would need a database pool, but for now return an error
-        Err(anyhow!("Please use create_backup_with_progress method"))
-    }
+    // pub async fn create_backup(
+    //     &self,
+    //     database_config: &DatabaseConfig,
+    //     task: &Task,
+    //     job_id: Option<String>,
+    // ) -> Result<String> {
+    //     // For backward compatibility, use a dummy job id if none provided
+    //     let job_id = job_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    //     
+    //     // This would need a database pool, but for now return an error
+    //     Err(anyhow!("Please use create_backup_with_progress method"))
+    // }
 
     // Helper methods for database operations
     async fn count_database_tables(&self, database_config: &DatabaseConfig) -> Result<u32> {
@@ -249,26 +249,21 @@ impl MydumperService {
         let now = chrono::Utc::now();
         
         let mut query = "UPDATE jobs SET status = ?, updated_at = ?".to_string();
-        let mut bind_count = 2;
         
         if status == "running" {
             query.push_str(", started_at = ?");
-            bind_count += 1;
         }
         
         if status == "completed" || status == "failed" || status == "cancelled" {
             query.push_str(", completed_at = ?");
-            bind_count += 1;
         }
         
         if error_message.is_some() {
             query.push_str(", error_message = ?");
-            bind_count += 1;
         }
         
         if log_output.is_some() {
             query.push_str(", log_output = ?");
-            bind_count += 1;
         }
         
         query.push_str(" WHERE id = ?");
@@ -318,9 +313,9 @@ impl MydumperService {
     }
 
     // Method to parse logs and calculate real-time progress
-    pub async fn get_job_progress_from_logs(&self, job_id: &str) -> Result<(i32, String)> {
+    pub async fn get_job_progress_from_logs(&self, _job_id: &str) -> Result<(i32, String)> {
         // Try to find the log directory for this job
-        let log_pattern = format!("{}/*/mydumper.log", self.log_base_dir);
+        let _log_pattern = format!("{}/*/mydumper.log", self.log_base_dir);
         
         // This is a simplified version - in practice, you'd want to store the log path in the job
         // For now, let's return a placeholder
@@ -458,63 +453,63 @@ impl MydumperService {
         Ok(())
     }
 
-    pub fn cleanup_old_backups(&self, database_name: &str, days: i64) -> Result<Vec<String>> {
-        let database_backup_dir = format!("{}/{}", self.backup_base_dir, database_name);
-        let cutoff_date = chrono::Utc::now() - chrono::Duration::days(days);
+    // pub fn cleanup_old_backups(&self, database_name: &str, days: i64) -> Result<Vec<String>> {
+    //     let database_backup_dir = format!("{}/{}", self.backup_base_dir, database_name);
+    //     let cutoff_date = chrono::Utc::now() - chrono::Duration::days(days);
 
-        let mut deleted_backups = Vec::new();
+    //     let mut deleted_backups = Vec::new();
 
-        if !Path::new(&database_backup_dir).exists() {
-            return Ok(deleted_backups);
-        }
+    //     if !Path::new(&database_backup_dir).exists() {
+    //         return Ok(deleted_backups);
+    //     }
 
-        for entry in std::fs::read_dir(&database_backup_dir)? {
-            let entry = entry?;
-            let path = entry.path();
+    //     for entry in std::fs::read_dir(&database_backup_dir)? {
+    //         let entry = entry?;
+    //         let path = entry.path();
 
-            if path.is_dir() {
-                if let Some(dir_name) = path.file_name().and_then(|n| n.to_str()) {
-                    // Try to parse timestamp from directory name (format: YYYYMMDD_HHMMSS)
-                    if let Ok(backup_date) = chrono::NaiveDateTime::parse_from_str(dir_name, "%Y%m%d_%H%M%S") {
-                        let backup_date = backup_date.and_utc();
-                        
-                        if backup_date < cutoff_date {
-                            info!("Deleting old backup: {}", path.display());
-                            
-                            if let Err(e) = std::fs::remove_dir_all(&path) {
-                                warn!("Failed to delete backup directory {}: {}", path.display(), e);
-                            } else {
-                                deleted_backups.push(path.to_string_lossy().to_string());
-                            }
-                        }
-                    }
-                }
-            }
-        }
+    //         if path.is_dir() {
+    //             if let Some(dir_name) = path.file_name().and_then(|n| n.to_str()) {
+    //                 // Try to parse timestamp from directory name (format: YYYYMMDD_HHMMSS)
+    //                 if let Ok(backup_date) = chrono::NaiveDateTime::parse_from_str(dir_name, "%Y%m%d_%H%M%S") {
+    //                     let backup_date = backup_date.and_utc();
+    //                     
+    //                     if backup_date < cutoff_date {
+    //                         info!("Deleting old backup: {}", path.display());
+    //                         
+    //                         if let Err(e) = std::fs::remove_dir_all(&path) {
+    //                             warn!("Failed to delete backup directory {}: {}", path.display(), e);
+    //                         } else {
+    //                             deleted_backups.push(path.to_string_lossy().to_string());
+    //                         }
+    //                     }
+    //                 }
+    //             }
+    //         }
+    //     }
 
-        Ok(deleted_backups)
-    }
+    //     Ok(deleted_backups)
+    // }
 
-    fn calculate_directory_size(&self, dir_path: &str) -> Result<i64> {
-        let mut total_size = 0;
-        
-        fn visit_dir(dir: &Path, total_size: &mut i64) -> Result<()> {
-            for entry in std::fs::read_dir(dir)? {
-                let entry = entry?;
-                let path = entry.path();
-                
-                if path.is_dir() {
-                    visit_dir(&path, total_size)?;
-                } else {
-                    *total_size += entry.metadata()?.len() as i64;
-                }
-            }
-            Ok(())
-        }
-        
-        visit_dir(Path::new(dir_path), &mut total_size)?;
-        Ok(total_size)
-    }
+    // fn calculate_directory_size(&self, dir_path: &str) -> Result<i64> {
+    //     let mut total_size = 0;
+    //     
+    //     fn visit_dir(dir: &Path, total_size: &mut i64) -> Result<()> {
+    //         for entry in std::fs::read_dir(dir)? {
+    //             let entry = entry?;
+    //             let path = entry.path();
+    //             
+    //             if path.is_dir() {
+    //                 visit_dir(&path, total_size)?;
+    //             } else {
+    //                 *total_size += entry.metadata()?.len() as i64;
+    //             }
+    //         }
+    //         Ok(())
+    //     }
+    //     
+    //     visit_dir(Path::new(dir_path), &mut total_size)?;
+    //     Ok(total_size)
+    // }
 
     async fn create_compressed_archive(&self, source_dir: &str, compression: &CompressionType) -> Result<String> {
         let archive_path = match compression {
@@ -572,21 +567,21 @@ impl MydumperService {
         Ok(extract_dir.to_string_lossy().to_string())
     }
 
-    pub fn is_mydumper_available(&self) -> bool {
-        Command::new("mydumper")
-            .arg("--version")
-            .output()
-            .map(|output| output.status.success())
-            .unwrap_or(false)
-    }
+    // pub fn is_mydumper_available(&self) -> bool {
+    //     Command::new("mydumper")
+    //         .arg("--version")
+    //         .output()
+    //         .map(|output| output.status.success())
+    //         .unwrap_or(false)
+    // }
 
-    pub fn is_myloader_available(&self) -> bool {
-        Command::new("myloader")
-            .arg("--version")
-            .output()
-            .map(|output| output.status.success())
-            .unwrap_or(false)
-    }
+    // pub fn is_myloader_available(&self) -> bool {
+    //     Command::new("myloader")
+    //         .arg("--version")
+    //         .output()
+    //         .map(|output| output.status.success())
+    //         .unwrap_or(false)
+    // }
 
     async fn compress_and_cleanup_backup(
         &self,

@@ -1,12 +1,12 @@
 use axum::{
     extract::{Path, Query, State},
-    routing::{delete, get, post},
+    routing::{get, post},
     Json, Router,
 };
 use serde::Deserialize;
 use sqlx::SqlitePool;
 
-use crate::models::{Job, CreateJobRequest, JobStatus, JobType};
+use crate::models::{Job, CreateJobRequest, JobStatus};
 use super::{ApiError, ApiResult, success_response, paginated_response};
 
 #[derive(Deserialize)]

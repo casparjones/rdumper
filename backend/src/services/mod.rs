@@ -2,4 +2,4 @@ pub mod mydumper;
 pub mod scheduler;
 
 pub use mydumper::MydumperService;
-pub use scheduler::TaskScheduler;
+// pub use scheduler::TaskScheduler; // Currently unused

@@ -85,7 +85,7 @@ USER rdumper
 EXPOSE 3000
 
 # Volumes für Config DB und Backups
-VOLUME ["/app/backend/data"]
+VOLUME ["/app/data"]
 
 # Environment variables
 ENV RUST_LOG=info

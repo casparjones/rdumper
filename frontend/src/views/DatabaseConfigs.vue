@@ -101,13 +101,6 @@
           <span>{{ error }}</span>
         </div>
 
-        <!-- Test Result Alert in Modal -->
-        <div v-if="testResult" :class="['alert mt-4', testResult.success ? 'alert-success' : 'alert-error']">
-          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" :d="testResult.success ? 'M5 13l4 4L19 7' : 'M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z'"></path>
-          </svg>
-          <span>{{ testResult.message }}</span>
-        </div>
 
         <form @submit.prevent="saveConfig" class="space-y-6 mt-4">
           <!-- Name -->
@@ -243,7 +236,6 @@ const saving = ref(false)
 const error = ref(null)
 const testingConnection = ref(null)
 const testingModalConnection = ref(false)
-const testResult = ref(null)
 
 const currentConfig = ref({
   name: '',
@@ -298,7 +290,6 @@ const editConfig = (config) => {
 const closeModal = () => {
   configModal.value.close()
   error.value = null
-  testResult.value = null
 }
 
 // Computed property to check if we can test connection in modal
@@ -398,25 +389,23 @@ const testConnection = async (id) => {
 const testConnectionInModal = async () => {
   try {
     testingModalConnection.value = true
-    testResult.value = null
     
     // For editing existing config, use the API test endpoint
     if (isEditing.value && currentConfig.value.id) {
       const response = await databaseConfigsApi.test(currentConfig.value.id)
       if (response.success) {
-        testResult.value = { success: true, message: 'Connection successful!' }
+        showTestResult(true, 'Connection successful!')
       } else {
-        testResult.value = { success: false, message: 'Connection failed' }
+        showTestResult(false, 'Connection failed')
       }
     } else {
-      // For new configs, we need to create a temporary test
-      // Since the backend test endpoint expects an existing config ID,
-      // we'll create the config first if it doesn't exist, then test
-      testResult.value = { success: true, message: 'Connection parameters look valid. Save to test the actual connection.' }
+      // For new configs, we can't test without saving first
+      // Just show a helpful message
+      showTestResult(true, 'Connection parameters look valid. Save to test the actual connection.')
     }
   } catch (err) {
     console.error('Error testing connection in modal:', err)
-    testResult.value = { success: false, message: 'Connection failed: ' + err.message }
+    showTestResult(false, 'Connection failed: ' + err.message)
   } finally {
     testingModalConnection.value = false
   }

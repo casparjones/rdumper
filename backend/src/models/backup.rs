@@ -44,29 +44,29 @@ impl Backup {
         }
     }
 
-    pub fn file_size_human(&self) -> String {
-        let size = self.file_size as f64;
-        let units = ["B", "KB", "MB", "GB", "TB"];
-        let mut size = size;
-        let mut unit_index = 0;
+    // pub fn file_size_human(&self) -> String {
+    //     let size = self.file_size as f64;
+    //     let units = ["B", "KB", "MB", "GB", "TB"];
+    //     let mut size = size;
+    //     let mut unit_index = 0;
 
-        while size >= 1024.0 && unit_index < units.len() - 1 {
-            size /= 1024.0;
-            unit_index += 1;
-        }
+    //     while size >= 1024.0 && unit_index < units.len() - 1 {
+    //         size /= 1024.0;
+    //         unit_index += 1;
+    //     }
 
-        if unit_index == 0 {
-            format!("{} {}", size as u64, units[unit_index])
-        } else {
-            format!("{:.2} {}", size, units[unit_index])
-        }
-    }
+    //     if unit_index == 0 {
+    //         format!("{} {}", size as u64, units[unit_index])
+    //     } else {
+    //         format!("{:.2} {}", size, units[unit_index])
+    //     }
+    // }
 
     pub fn filename(&self) -> Option<&str> {
         std::path::Path::new(&self.file_path).file_name()?.to_str()
     }
 
-    pub fn extension(&self) -> Option<&str> {
-        std::path::Path::new(&self.file_path).extension()?.to_str()
-    }
+    // pub fn extension(&self) -> Option<&str> {
+    //     std::path::Path::new(&self.file_path).extension()?.to_str()
+    // }
 }
