@@ -8,7 +8,7 @@ const getApiBaseUrl = () => {
   // Automatische Domain-Erkennung
   const protocol = window.location.protocol
   const hostname = window.location.hostname
-  const port = import.meta.env.VITE_API_PORT || '3000'
+  const port = import.meta.env.VITE_API_PORT || '443'
   
   // Für Development: localhost mit konfigurierbarem Port
   if (hostname === 'localhost' || hostname === '127.0.0.1') {
