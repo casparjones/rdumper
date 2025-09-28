@@ -5,7 +5,7 @@ use tokio::io::{AsyncBufReadExt, BufReader, AsyncWriteExt};
 use tokio::process::Command as TokioCommand;
 use tokio::fs::File;
 use tracing::{error, info, warn};
-use sqlx::{SqlitePool, MySqlPool};
+use sqlx::{SqlitePool, MySqlPool, Row};
 
 use crate::models::{DatabaseConfig, Task, CompressionType};
 
@@ -19,6 +19,53 @@ impl MydumperService {
         Self { backup_base_dir, log_base_dir }
     }
 
+    /// Analyze table engines and return InnoDB tables, excluding MyISAM and other non-transactional engines
+    async fn analyze_table_engines(&self, database_config: &DatabaseConfig) -> Result<(Vec<String>, Vec<String>)> {
+        let connection_string = format!(
+            "mysql://{}:{}@{}:{}/{}",
+            database_config.username,
+            database_config.password,
+            database_config.host,
+            database_config.port,
+            database_config.database_name
+        );
+
+        let pool = MySqlPool::connect(&connection_string).await?;
+        
+        // Query to get table names and their engines
+        let query = "SELECT TABLE_NAME, ENGINE FROM information_schema.TABLES WHERE TABLE_SCHEMA = ?";
+        let rows = sqlx::query(query)
+            .bind(&database_config.database_name)
+            .fetch_all(&pool)
+            .await?;
+
+        let mut innodb_tables = Vec::new();
+        let mut excluded_tables = Vec::new();
+
+        for row in rows {
+            let table_name: String = row.get("TABLE_NAME");
+            let engine: String = row.get("ENGINE");
+            
+            match engine.to_uppercase().as_str() {
+                "INNODB" => {
+                    innodb_tables.push(table_name);
+                }
+                "MYISAM" | "MEMORY" | "CSV" | "ARCHIVE" | "FEDERATED" | "MERGE" | "BLACKHOLE" => {
+                    excluded_tables.push(format!("{} ({})", table_name, engine));
+                }
+                _ => {
+                    // For unknown engines, include them but log a warning
+                    warn!("Unknown table engine '{}' for table '{}', including in backup", engine, table_name);
+                    innodb_tables.push(table_name);
+                }
+            }
+        }
+
+        pool.close().await;
+
+        Ok((innodb_tables, excluded_tables))
+    }
+
     pub async fn create_backup_with_progress(
         &self,
         database_config: &DatabaseConfig,
@@ -27,6 +74,18 @@ impl MydumperService {
         pool: &SqlitePool,
     ) -> Result<String> {
         info!("Starting backup for database: {} (Job: {})", database_config.database_name, job_id);
+
+        // Analyze table engines
+        let (innodb_tables, excluded_tables) = self.analyze_table_engines(database_config).await?;
+        
+        // Log table analysis results
+        info!("Database {} analysis: {} InnoDB tables, {} non-InnoDB tables excluded", 
+              database_config.database_name, innodb_tables.len(), excluded_tables.len());
+        
+        if !excluded_tables.is_empty() {
+            warn!("Excluded non-InnoDB tables from backup: {}", excluded_tables.join(", "));
+            warn!("MyDumper can only safely backup InnoDB tables. Non-InnoDB tables may have inconsistent data.");
+        }
 
         // Create directory structure: <database>-<datum>/temp and logs
         let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
@@ -39,12 +98,12 @@ impl MydumperService {
         std::fs::create_dir_all(&backup_dir)?;
         std::fs::create_dir_all(&log_dir)?;
 
-        // Count tables for progress tracking
-        let table_count = self.count_database_tables(database_config).await?;
+        // Use InnoDB table count for progress tracking
+        let table_count = innodb_tables.len() as u32;
         let count_file = format!("{}/count_tables.txt", log_dir);
         std::fs::write(&count_file, table_count.to_string())?;
 
-        info!("Database {} has {} tables", database_config.database_name, table_count);
+        info!("Database {} has {} InnoDB tables for backup", database_config.database_name, table_count);
 
         // Create log file
         let log_file_path = format!("{}/mydumper.log", log_dir);
@@ -71,6 +130,15 @@ impl MydumperService {
         if task.use_non_transactional {
             cmd.arg("--trx-tables").arg("0");
             cmd.arg("--no-backup-locks");
+        } else {
+            // For safe InnoDB-only backup, specify only InnoDB tables
+            if !innodb_tables.is_empty() {
+                let tables_list = innodb_tables.join(",");
+                cmd.arg("--tables").arg(&tables_list);
+                info!("Backing up only InnoDB tables: {}", tables_list);
+            } else {
+                warn!("No InnoDB tables found in database {}", database_config.database_name);
+            }
         }
 
         // Add compression if specified
@@ -224,25 +292,6 @@ impl MydumperService {
     // }
 
     // Helper methods for database operations
-    async fn count_database_tables(&self, database_config: &DatabaseConfig) -> Result<u32> {
-        let connection_string = format!(
-            "mysql://{}:{}@{}:{}/{}",
-            database_config.username,
-            database_config.password,
-            database_config.host,
-            database_config.port,
-            database_config.database_name
-        );
-
-        let pool = MySqlPool::connect(&connection_string).await?;
-        let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = ?")
-            .bind(&database_config.database_name)
-            .fetch_one(&pool)
-            .await?;
-        
-        pool.close().await;
-        Ok(row.0 as u32)
-    }
 
     async fn update_job_status(
         &self,
