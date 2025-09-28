@@ -14,6 +14,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - README authors section with bilingual credit attribution
 
+## [2025-09-28] - 2025-09-28
+
+### Added
+- **Advanced Options Panel**: Collapsible "Advanced Options" section in Task creation/editing
+- **MyISAM Support**: Option to backup non-transactional tables (MyISAM) with special parameters
+- **InnoDB Table Analysis**: Automatic detection and filtering of table engines before backup
+- **MyDumper Help Integration**: Automatic `--help` execution before each backup to show available options
+- **Engine-based Filtering**: Automatic exclusion of MyISAM, MEMORY, CSV, ARCHIVE, FEDERATED, MERGE, BLACKHOLE tables
+- **Duplicate Database Config**: "Duplicate" button for easy creation of similar database configurations
+- **Password Visibility Toggle**: Show/hide password option in database configuration editing
+- **Enhanced Logging**: Detailed warnings about excluded tables and engine types
+
+### Changed
+- **MyDumper Parameters**: 
+  - Standard backup: Uses `--ignore-engines` to exclude non-InnoDB tables
+  - Advanced backup: Uses `--trx-tables=0 --no-backup-locks` for MyISAM support
+- **Database Configuration UI**: 
+  - Password field shows hint "Leave empty to keep current password" when editing
+  - Password is optional during editing (required only for new configurations)
+  - Added "Show password" checkbox for visibility control
+- **Task Creation Flow**: Advanced options are collapsed by default, auto-expand when MyISAM is enabled
+- **Backup Strategy**: Intelligent engine detection with automatic filtering for data consistency
+
+### Fixed
+- **MyDumper Parameter Error**: Replaced invalid `--tables` option with correct `--ignore-engines` parameter
+- **Multipart Upload**: Resolved "Failed to read file data" error by switching to `axum-extra::extract::Multipart`
+- **Frontend API Configuration**: Automatic domain detection instead of hardcoded localhost:3000
+- **Environment Variables**: Added support for `VITE_API_URL`, `VITE_API_PORT`, `VITE_DEV_PORT`
+
+### Technical Improvements
+- **Backend**: Enhanced MyDumper service with table engine analysis and intelligent parameter selection
+- **Frontend**: Improved Advanced Options UI with collapsible design and smart state management
+- **Database Schema**: Added `use_non_transactional` field to tasks table with migration support
+- **API Integration**: Better error handling for multipart uploads and environment-based configuration
+- **Logging**: Comprehensive logging of MyDumper options and table analysis results
+
+### Security & Data Integrity
+- **InnoDB-only Backups**: Default strategy ensures only transactional tables are backed up
+- **MyISAM Warning**: Clear warnings about potential data inconsistency with non-transactional tables
+- **Engine Validation**: Automatic detection and exclusion of problematic storage engines
+
 ## [2025-09-27] - 2025-09-27
 
 ### Added
