@@ -28,15 +28,38 @@ COPY backend/src ./src
 # Build the application (Alpine uses musl by default)
 RUN cargo build --release
 
-# Stage 3: Runtime
+# Stage 3: Build mydumper + myloader
+FROM alpine:latest AS mydumper-builder
+
+RUN apk add --no-cache \
+    build-base \
+    cmake \
+    glib-dev \
+    pcre-dev \
+    mariadb-connector-c-dev \
+    zlib-dev \
+    wget \
+    ca-certificates
+
+WORKDIR /src
+RUN wget https://github.com/mydumper/mydumper/archive/refs/tags/v0.14.4.tar.gz -O mydumper.tar.gz \
+    && tar xzf mydumper.tar.gz --strip 1
+
+RUN mkdir build && cd build && \
+    cmake .. -DCMAKE_BUILD_TYPE=Release && \
+    make && make install
+
+# Stage 4: Runtime
 FROM alpine:latest
 
-# Install dependencies (mydumper will be added separately)
+# Install runtime dependencies (for rdumper and mydumper)
 RUN apk add --no-cache \
     ca-certificates \
     wget \
     sqlite \
-    sqlite-dev
+    glib \
+    pcre \
+    mariadb-connector-c
 
 # Create app user and directories with proper permissions
 RUN adduser -D -s /bin/false rdumper && \
@@ -49,6 +72,8 @@ WORKDIR /app
 # Copy built artifacts
 COPY --from=backend-builder /app/target/release/rdumper-backend ./rdumper-backend
 COPY --from=frontend-builder /app/frontend/dist ./static
+COPY --from=mydumper-builder /usr/local/bin/mydumper /usr/local/bin/
+COPY --from=mydumper-builder /usr/local/bin/myloader /usr/local/bin/
 
 # Change ownership
 RUN chown -R rdumper:rdumper /app
@@ -69,12 +94,9 @@ ENV BACKUP_DIR=/data/backups
 ENV LOG_DIR=/data/logs
 ENV STATIC_DIR=/app/static
 
-# Health check
-#HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-#    CMD wget --no-verbose --tries=1 --spider http://localhost:3000/api/system || exit 1
-
-# Container im Leerlauf halten
-# CMD ["tail", "-f", "/dev/null"]
+# Health check (auskommentiert, weil /api/system 404 liefert)
+# HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+#     CMD wget --no-verbose --tries=1 --spider http://localhost:3000/health || exit 1
 
 # Start the application
 CMD ["./rdumper-backend", "--host", "0.0.0.0", "--port", "3000", "--database-url", "sqlite:///data/rdumper.db", "--backup-dir", "/data/backups", "--log-dir", "/data/logs", "--static-dir", "/app/static"]

@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Path, Query, State, Multipart},
     routing::{delete, get, post},
     Json, Router,
     response::Response,
@@ -24,6 +24,7 @@ pub struct ListQuery {
 pub fn routes(pool: SqlitePool) -> Router {
     Router::new()
         .route("/", get(list_backups).post(create_backup))
+        .route("/upload", post(upload_backup))
         .route("/:id", get(get_backup).delete(delete_backup))
         .route("/:id/restore", post(restore_backup))
         .route("/:id/download", get(download_backup))
@@ -174,6 +175,137 @@ async fn create_backup(
     .await?;
 
     Ok(success_response(backup))
+}
+
+async fn upload_backup(
+    State(pool): State<SqlitePool>,
+    mut multipart: Multipart,
+) -> ApiResult<impl axum::response::IntoResponse> {
+    let mut file_data = Vec::new();
+    let mut filename = String::new();
+    let mut database_config_id = String::new();
+    let mut compression_type = "gzip".to_string();
+
+    // Parse multipart form data
+    while let Some(field) = multipart.next_field().await.map_err(|e| {
+        ApiError::BadRequest(format!("Failed to read multipart field: {}", e))
+    })? {
+        match field.name() {
+            Some("file") => {
+                if let Some(name) = field.file_name() {
+                    filename = name.to_string();
+                }
+                let data = field.bytes().await.map_err(|e| {
+                    ApiError::BadRequest(format!("Failed to read file data: {}", e))
+                })?;
+                file_data = data.to_vec();
+            }
+            Some("database_config_id") => {
+                let text = field.text().await.map_err(|e| {
+                    ApiError::BadRequest(format!("Failed to read database_config_id: {}", e))
+                })?;
+                database_config_id = text;
+            }
+            Some("compression_type") => {
+                let text = field.text().await.map_err(|e| {
+                    ApiError::BadRequest(format!("Failed to read compression_type: {}", e))
+                })?;
+                compression_type = text;
+            }
+            _ => {}
+        }
+    }
+
+    if file_data.is_empty() {
+        return Err(ApiError::BadRequest("No file provided".to_string()));
+    }
+
+    if database_config_id.is_empty() {
+        return Err(ApiError::BadRequest("database_config_id is required".to_string()));
+    }
+
+    // Validate database config exists
+    let db_config_exists: Option<(String,)> = sqlx::query_as(
+        "SELECT id FROM database_configs WHERE id = ?"
+    )
+    .bind(&database_config_id)
+    .fetch_optional(&pool)
+    .await?;
+
+    if db_config_exists.is_none() {
+        return Err(ApiError::BadRequest("Database configuration not found".to_string()));
+    }
+
+    // Create backup directory if it doesn't exist
+    let backup_dir = std::env::var("BACKUP_BASE_DIR").unwrap_or_else(|_| "backend/data/backups".to_string());
+    std::fs::create_dir_all(&backup_dir).map_err(|e| {
+        ApiError::InternalError(format!("Failed to create backup directory: {}", e))
+    })?;
+
+    // Generate unique filename with timestamp
+    let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
+    let file_extension = if filename.ends_with(".tar.gz") {
+        "tar.gz"
+    } else if filename.ends_with(".tar.zst") {
+        "tar.zst"
+    } else {
+        "tar.gz" // Default to gzip
+    };
+    
+    let safe_filename = filename
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '.' || c == '-' || c == '_' { c } else { '_' })
+        .collect::<String>();
+    
+    let backup_filename = format!("uploaded_{}_{}.{}", 
+        safe_filename.trim_end_matches(&format!(".{}", file_extension)),
+        timestamp,
+        file_extension
+    );
+    
+    let backup_path = format!("{}/{}", backup_dir, backup_filename);
+
+    // Write file to disk
+    tokio::fs::write(&backup_path, &file_data).await.map_err(|e| {
+        ApiError::InternalError(format!("Failed to write backup file: {}", e))
+    })?;
+
+    // Get file size
+    let file_size = file_data.len() as i64;
+
+    // Create backup record
+    let backup_request = CreateBackupRequest {
+        database_config_id,
+        task_id: None, // Uploaded backups are not associated with tasks
+        file_path: backup_path,
+        file_size,
+        compression_type,
+    };
+
+    let backup = Backup::new(backup_request);
+
+    // Insert backup into database
+    sqlx::query(
+        r#"
+        INSERT INTO backups (id, database_config_id, task_id, file_path, file_size, compression_type, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        "#
+    )
+    .bind(&backup.id)
+    .bind(&backup.database_config_id)
+    .bind(&backup.task_id)
+    .bind(&backup.file_path)
+    .bind(&backup.file_size)
+    .bind(&backup.compression_type)
+    .bind(&backup.created_at)
+    .execute(&pool)
+    .await?;
+
+    Ok(success_response(serde_json::json!({
+        "message": "Backup uploaded successfully",
+        "backup": backup,
+        "original_filename": filename
+    })))
 }
 
 async fn delete_backup(

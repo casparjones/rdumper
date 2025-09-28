@@ -1,8 +1,20 @@
 <template>
   <div>
     <div class="mb-6">
-      <h1 class="text-3xl font-bold text-base-content">Backups</h1>
-      <p class="text-base-content/70 mt-2">Browse and restore your database backups</p>
+      <div class="flex justify-between items-center">
+        <div>
+          <h1 class="text-3xl font-bold text-base-content">Backups</h1>
+          <p class="text-base-content/70 mt-2">Browse and restore your database backups</p>
+        </div>
+        <button 
+          class="btn btn-primary"
+          @click="openUploadModal"
+          :disabled="uploading"
+        >
+          <span v-if="uploading" class="loading loading-spinner loading-sm"></span>
+          📤 Upload Backup
+        </button>
+      </div>
     </div>
 
     <!-- Loading state -->
@@ -115,6 +127,82 @@
         </div>
       </div>
     </div>
+
+    <!-- Upload Modal -->
+    <div v-if="showUploadModal" class="modal modal-open">
+      <div class="modal-box">
+        <h3 class="font-bold text-lg">Upload Backup</h3>
+        <div class="py-4">
+          <div class="form-control w-full mb-4">
+            <label class="label">
+              <span class="label-text">Select Backup File</span>
+            </label>
+            <input 
+              ref="fileInput"
+              type="file" 
+              accept=".tar.gz,.tar.zst"
+              @change="handleFileSelect"
+              class="file-input file-input-bordered w-full"
+            />
+            <label class="label">
+              <span class="label-text-alt">Supported formats: .tar.gz, .tar.zst</span>
+            </label>
+          </div>
+          
+          <div class="form-control w-full mb-4">
+            <label class="label">
+              <span class="label-text">Target Database</span>
+            </label>
+            <select 
+              v-model="uploadForm.databaseConfigId"
+              class="select select-bordered w-full"
+              required
+            >
+              <option value="">Select a database configuration</option>
+              <option 
+                v-for="config in databaseConfigs" 
+                :key="config.id" 
+                :value="config.id"
+              >
+                {{ config.name }} ({{ config.database_name }})
+              </option>
+            </select>
+          </div>
+
+          <div class="form-control w-full mb-4">
+            <label class="label">
+              <span class="label-text">Compression Type</span>
+            </label>
+            <select 
+              v-model="uploadForm.compressionType"
+              class="select select-bordered w-full"
+            >
+              <option value="gzip">Gzip (.tar.gz)</option>
+              <option value="zstd">Zstandard (.tar.zst)</option>
+            </select>
+          </div>
+
+          <div v-if="selectedFile" class="alert alert-info">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-current shrink-0 w-6 h-6"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+            <div>
+              <div class="font-bold">Selected file:</div>
+              <div>{{ selectedFile.name }} ({{ formatFileSize(selectedFile.size) }})</div>
+            </div>
+          </div>
+        </div>
+        <div class="modal-action">
+          <button 
+            class="btn btn-primary"
+            @click="confirmUpload"
+            :disabled="uploading || !selectedFile || !uploadForm.databaseConfigId"
+          >
+            <span v-if="uploading" class="loading loading-spinner loading-sm"></span>
+            {{ uploading ? 'Uploading...' : 'Upload' }}
+          </button>
+          <button class="btn" @click="closeUploadModal">Cancel</button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -128,15 +216,25 @@ const error = ref(null)
 const backups = ref([])
 const databaseConfigs = ref([])
 const showRestoreModal = ref(false)
+const showUploadModal = ref(false)
 const restoring = ref(false)
 const downloading = ref(false)
 const deleting = ref(false)
+const uploading = ref(false)
+const selectedFile = ref(null)
+const fileInput = ref(null)
 
 // Restore form
 const restoreForm = ref({
   backupId: null,
   databaseName: '',
   overwriteExisting: false
+})
+
+// Upload form
+const uploadForm = ref({
+  databaseConfigId: '',
+  compressionType: 'gzip'
 })
 
 // Computed
@@ -208,6 +306,75 @@ const closeRestoreModal = () => {
     backupId: null,
     databaseName: '',
     overwriteExisting: false
+  }
+}
+
+const openUploadModal = () => {
+  showUploadModal.value = true
+  uploadForm.value = {
+    databaseConfigId: '',
+    compressionType: 'gzip'
+  }
+  selectedFile.value = null
+  if (fileInput.value) {
+    fileInput.value.value = ''
+  }
+}
+
+const closeUploadModal = () => {
+  showUploadModal.value = false
+  uploadForm.value = {
+    databaseConfigId: '',
+    compressionType: 'gzip'
+  }
+  selectedFile.value = null
+  if (fileInput.value) {
+    fileInput.value.value = ''
+  }
+}
+
+const handleFileSelect = (event) => {
+  const file = event.target.files[0]
+  if (file) {
+    selectedFile.value = file
+    // Auto-detect compression type based on file extension
+    if (file.name.endsWith('.tar.zst')) {
+      uploadForm.value.compressionType = 'zstd'
+    } else if (file.name.endsWith('.tar.gz')) {
+      uploadForm.value.compressionType = 'gzip'
+    }
+  } else {
+    selectedFile.value = null
+  }
+}
+
+const confirmUpload = async () => {
+  if (!selectedFile.value || !uploadForm.value.databaseConfigId) {
+    return
+  }
+
+  try {
+    uploading.value = true
+    
+    const response = await backupsApi.upload(
+      selectedFile.value,
+      uploadForm.value.databaseConfigId,
+      uploadForm.value.compressionType
+    )
+    
+    // Add the new backup to the list
+    backups.value.unshift(response.data.backup)
+    
+    // Show success toast
+    showToast(true, `Backup uploaded successfully! 📤`)
+    
+    closeUploadModal()
+  } catch (err) {
+    error.value = err.message || 'Failed to upload backup'
+    showToast(false, 'Failed to upload backup: ' + err.message)
+    console.error('Error uploading backup:', err)
+  } finally {
+    uploading.value = false
   }
 }
 

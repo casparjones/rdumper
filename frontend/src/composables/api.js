@@ -221,6 +221,26 @@ export const backupsApi = {
 
   cleanup(days = 30) {
     return apiClient.post('/api/backups/cleanup', { days })
+  },
+
+  // Upload backup file
+  async upload(file, databaseConfigId, compressionType = 'gzip') {
+    const formData = new FormData()
+    formData.append('file', file)
+    formData.append('database_config_id', databaseConfigId)
+    formData.append('compression_type', compressionType)
+
+    const response = await fetch(`${apiClient.baseUrl}/api/backups/upload`, {
+      method: 'POST',
+      body: formData,
+    })
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ error: 'Unknown error' }))
+      throw new Error(errorData.error || `HTTP ${response.status}`)
+    }
+
+    return await response.json()
   }
 }
 
