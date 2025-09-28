@@ -333,12 +333,20 @@ impl MydumperService {
         .await?;
 
         if let Some((log_output, backup_path)) = job {
-            // If we have a direct log_output, return it
-            if let Some(log) = log_output {
-                return Ok(log);
+            // First, try to read from the log_output path if it's a file path
+            if let Some(log_path) = log_output {
+                // Check if it's a file path (contains .log)
+                if log_path.contains(".log") && tokio::fs::metadata(&log_path).await.is_ok() {
+                    let content = tokio::fs::read_to_string(&log_path).await?;
+                    return Ok(content);
+                }
+                // If it's not a file path but contains log content, return it as is
+                if !log_path.contains("/") && !log_path.contains("\\") {
+                    return Ok(log_path);
+                }
             }
             
-            // Otherwise, try to read from log file
+            // Otherwise, try to read from log file based on backup path
             if let Some(backup_path) = backup_path {
                 let base_folder = backup_path.split('/').last().unwrap_or("");
                 let log_file_path = format!("{}/{}/mydumper.log", self.log_base_dir, base_folder);
