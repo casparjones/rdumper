@@ -75,16 +75,16 @@ impl MydumperService {
     ) -> Result<String> {
         info!("Starting backup for database: {} (Job: {})", database_config.database_name, job_id);
 
-        // Analyze table engines
+        // Analyze table engines for logging purposes
         let (innodb_tables, excluded_tables) = self.analyze_table_engines(database_config).await?;
         
         // Log table analysis results
-        info!("Database {} analysis: {} InnoDB tables, {} non-InnoDB tables excluded", 
+        info!("Database {} analysis: {} InnoDB tables, {} non-InnoDB tables will be ignored", 
               database_config.database_name, innodb_tables.len(), excluded_tables.len());
         
         if !excluded_tables.is_empty() {
-            warn!("Excluded non-InnoDB tables from backup: {}", excluded_tables.join(", "));
-            warn!("MyDumper can only safely backup InnoDB tables. Non-InnoDB tables may have inconsistent data.");
+            warn!("Ignoring non-InnoDB tables: {}", excluded_tables.join(", "));
+            warn!("MyDumper will ignore these tables using --ignore-engines parameter");
         }
 
         // Create directory structure: <database>-<datum>/temp and logs
@@ -98,12 +98,13 @@ impl MydumperService {
         std::fs::create_dir_all(&backup_dir)?;
         std::fs::create_dir_all(&log_dir)?;
 
-        // Use InnoDB table count for progress tracking
-        let table_count = innodb_tables.len() as u32;
+        // Use total table count for progress tracking (MyDumper will handle filtering)
+        let table_count = (innodb_tables.len() + excluded_tables.len()) as u32;
         let count_file = format!("{}/count_tables.txt", log_dir);
         std::fs::write(&count_file, table_count.to_string())?;
 
-        info!("Database {} has {} InnoDB tables for backup", database_config.database_name, table_count);
+        info!("Database {} has {} total tables ({} InnoDB will be backed up)", 
+              database_config.database_name, table_count, innodb_tables.len());
 
         // Create log file
         let log_file_path = format!("{}/mydumper.log", log_dir);
@@ -111,6 +112,32 @@ impl MydumperService {
 
         // Update job status to running
         self.update_job_status(pool, &job_id, "running", None, None).await?;
+
+        // First, run mydumper --help to show all available options
+        info!("Running mydumper --help to show available options");
+        let help_log = format!("[{}] INFO: Running mydumper --help to show available options\n", 
+            chrono::Utc::now().format("%Y-%m-%d %H:%M:%S"));
+        log_file.write_all(help_log.as_bytes()).await?;
+        log_file.flush().await?;
+
+        let help_cmd = TokioCommand::new("mydumper")
+            .arg("--help")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+
+        let help_output = help_cmd.wait_with_output().await?;
+        
+        // Log the help output
+        let help_stdout = String::from_utf8_lossy(&help_output.stdout);
+        let help_stderr = String::from_utf8_lossy(&help_output.stderr);
+        
+        let help_log_entry = format!("[{}] INFO: MyDumper Help Output:\n{}\n{}\n", 
+            chrono::Utc::now().format("%Y-%m-%d %H:%M:%S"), 
+            help_stdout, 
+            help_stderr);
+        log_file.write_all(help_log_entry.as_bytes()).await?;
+        log_file.flush().await?;
 
         // Build mydumper command
         let mut cmd = TokioCommand::new("mydumper");
@@ -131,14 +158,9 @@ impl MydumperService {
             cmd.arg("--trx-tables").arg("0");
             cmd.arg("--no-backup-locks");
         } else {
-            // For safe InnoDB-only backup, specify only InnoDB tables
-            if !innodb_tables.is_empty() {
-                let tables_list = innodb_tables.join(",");
-                cmd.arg("--tables").arg(&tables_list);
-                info!("Backing up only InnoDB tables: {}", tables_list);
-            } else {
-                warn!("No InnoDB tables found in database {}", database_config.database_name);
-            }
+            // For safe InnoDB-only backup, ignore non-InnoDB engines
+            cmd.arg("--ignore-engines").arg("MyISAM,MEMORY,CSV,ARCHIVE,FEDERATED,MERGE,BLACKHOLE");
+            info!("Ignoring non-InnoDB engines: MyISAM,MEMORY,CSV,ARCHIVE,FEDERATED,MERGE,BLACKHOLE");
         }
 
         // Add compression if specified
