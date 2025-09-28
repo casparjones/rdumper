@@ -1,5 +1,25 @@
-// API Base URL - sollte aus Environment Variable kommen
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000'
+// API Base URL - automatische Domain-Erkennung mit Environment-basiertem Port
+const getApiBaseUrl = () => {
+  // Wenn VITE_API_URL explizit gesetzt ist, verwende diese
+  if (import.meta.env.VITE_API_URL) {
+    return import.meta.env.VITE_API_URL
+  }
+  
+  // Automatische Domain-Erkennung
+  const protocol = window.location.protocol
+  const hostname = window.location.hostname
+  const port = import.meta.env.VITE_API_PORT || '3000'
+  
+  // Für Development: localhost mit konfigurierbarem Port
+  if (hostname === 'localhost' || hostname === '127.0.0.1') {
+    return `${protocol}//${hostname}:${port}`
+  }
+  
+  // Für Production: gleiche Domain mit konfigurierbarem Port
+  return `${protocol}//${hostname}:${port}`
+}
+
+const API_BASE_URL = getApiBaseUrl()
 
 // Generic API client
 class ApiClient {
