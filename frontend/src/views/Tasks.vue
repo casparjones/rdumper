@@ -201,23 +201,35 @@
             </div>
           </div>
 
-          <!-- Non-Transactional Tables Option -->
-          <div class="form-control w-full">
-            <label class="label cursor-pointer">
-              <span class="label-text font-semibold">⚠️ Use Non-Transactional Tables (MyISAM)</span>
-              <input 
-                v-model="currentTask.use_non_transactional" 
-                type="checkbox" 
-                class="checkbox checkbox-warning" 
-              />
-            </label>
-            <div v-if="currentTask.use_non_transactional" class="alert alert-warning mt-2">
-              <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z"></path>
-              </svg>
-              <div>
-                <div class="font-semibold">Warning!</div>
-                <div class="text-sm">Non-transactional tables will also be backed up, but without guarantees that they have the same state as the rest of the data.</div>
+          <!-- Advanced Options -->
+          <div class="collapse collapse-arrow bg-base-200">
+            <input type="checkbox" v-model="showAdvancedOptions" />
+            <div class="collapse-title text-lg font-medium">
+              ⚙️ Advanced Options
+            </div>
+            <div class="collapse-content">
+              <div class="space-y-4 pt-4">
+                <!-- Non-Transactional Tables Option -->
+                <div class="form-control w-full">
+                  <label class="label cursor-pointer">
+                    <span class="label-text font-semibold">⚠️ Use Non-Transactional Tables (MyISAM)</span>
+                    <input 
+                      v-model="currentTask.use_non_transactional" 
+                      type="checkbox" 
+                      class="checkbox checkbox-warning" 
+                    />
+                  </label>
+                  <div v-if="currentTask.use_non_transactional" class="alert alert-warning mt-2">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z"></path>
+                    </svg>
+                    <div>
+                      <div class="font-semibold">Warning!</div>
+                      <div class="text-sm">Non-transactional tables will also be backed up, but without guarantees that they have the same state as the rest of the data.</div>
+                      <div class="text-xs mt-1 opacity-75">This will use --trx-tables=0 and --no-backup-locks parameters.</div>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -259,6 +271,7 @@ const saving = ref(false)
 const error = ref(null)
 const modalError = ref(null)
 const runningTask = ref(null)
+const showAdvancedOptions = ref(false)
 
 const currentTask = ref({
   name: '',
@@ -311,6 +324,7 @@ const openAddModal = () => {
     cleanup_days: 30,
     use_non_transactional: false
   }
+  showAdvancedOptions.value = false
   modalError.value = null
   taskModal.value.showModal()
 }
@@ -326,6 +340,7 @@ const editTask = (task) => {
     cleanup_days: task.cleanup_days,
     use_non_transactional: task.use_non_transactional || false
   }
+  showAdvancedOptions.value = task.use_non_transactional || false
   modalError.value = null
   taskModal.value.showModal()
 }
@@ -333,6 +348,7 @@ const editTask = (task) => {
 const closeModal = () => {
   taskModal.value.close()
   modalError.value = null
+  showAdvancedOptions.value = false
 }
 
 // Task operations

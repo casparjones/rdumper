@@ -70,6 +70,7 @@ impl MydumperService {
         // Add non-transactional tables option if enabled
         if task.use_non_transactional {
             cmd.arg("--trx-tables").arg("0");
+            cmd.arg("--no-backup-locks");
         }
 
         // Add compression if specified
