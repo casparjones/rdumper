@@ -42,8 +42,10 @@ RUN apk add --no-cache \
     ca-certificates
 
 WORKDIR /src
-RUN wget https://github.com/mydumper/mydumper/archive/refs/tags/v0.14.4.tar.gz -O mydumper.tar.gz \
+ENV MYDUMPER_VERSION=0.20.1
+RUN wget https://github.com/mydumper/mydumper/archive/refs/tags/v${MYDUMPER_VERSION}.tar.gz -O mydumper.tar.gz \
     && tar xzf mydumper.tar.gz --strip 1
+
 
 RUN mkdir build && cd build && \
     cmake .. -DCMAKE_BUILD_TYPE=Release && \
