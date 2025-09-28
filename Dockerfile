@@ -42,8 +42,8 @@ RUN apk add --no-cache \
     ca-certificates
 
 WORKDIR /src
-ENV MYDUMPER_VERSION=0.20.1
-RUN wget https://github.com/mydumper/mydumper/archive/refs/tags/v${MYDUMPER_VERSION}.tar.gz -O mydumper.tar.gz \
+ENV MYDUMPER_VERSION=v0.20.1-2
+RUN wget https://github.com/mydumper/mydumper/archive/refs/tags/${MYDUMPER_VERSION}.tar.gz -O mydumper.tar.gz \
     && tar xzf mydumper.tar.gz --strip 1
 
 
