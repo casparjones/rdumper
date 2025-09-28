@@ -74,7 +74,7 @@ ENV STATIC_DIR=/app/static
 #    CMD wget --no-verbose --tries=1 --spider http://localhost:3000/api/system || exit 1
 
 # Container im Leerlauf halten
-CMD ["tail", "-f", "/dev/null"]
+# CMD ["tail", "-f", "/dev/null"]
 
 # Start the application
-# CMD ["./rdumper-backend", "--host", "0.0.0.0", "--port", "3000", "--database-url", "sqlite:///data/rdumper.db", "--backup-dir", "/data/backups", "--log-dir", "/data/logs", "--static-dir", "/app/static"]
+CMD ["./rdumper-backend", "--host", "0.0.0.0", "--port", "3000", "--database-url", "sqlite:///data/rdumper.db", "--backup-dir", "/data/backups", "--log-dir", "/data/logs", "--static-dir", "/app/static"]
