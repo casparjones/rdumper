@@ -1,10 +1,11 @@
 use axum::{
-    extract::{Path, Query, State, Multipart},
+    extract::{Path, Query, State},
     routing::{get, post},
     Json, Router,
     response::Response,
     body::Body,
 };
+use axum_extra::extract::Multipart;
 use serde::Deserialize;
 use sqlx::SqlitePool;
 use std::path::Path as StdPath;
@@ -188,31 +189,44 @@ async fn upload_backup(
 
     // Parse multipart form data
     while let Some(field) = multipart.next_field().await.map_err(|e| {
+        error!("Multipart field error: {}", e);
         ApiError::BadRequest(format!("Failed to read multipart field: {}", e))
     })? {
-        match field.name() {
-            Some("file") => {
+        let field_name = field.name().unwrap_or("unknown");
+        error!("Processing field: '{}'", field_name);
+        
+        match field_name {
+            "file" => {
                 if let Some(name) = field.file_name() {
                     filename = name.to_string();
+                    error!("File name: '{}'", filename);
                 }
                 let data = field.bytes().await.map_err(|e| {
+                    error!("Failed to read file bytes: {}", e);
                     ApiError::BadRequest(format!("Failed to read file data: {}", e))
                 })?;
                 file_data = data.to_vec();
+                error!("File data size: {} bytes", file_data.len());
             }
-            Some("database_config_id") => {
+            "database_config_id" => {
                 let text = field.text().await.map_err(|e| {
+                    error!("Failed to read database_config_id text: {}", e);
                     ApiError::BadRequest(format!("Failed to read database_config_id: {}", e))
                 })?;
                 database_config_id = text;
+                error!("Database config ID: '{}'", database_config_id);
             }
-            Some("compression_type") => {
+            "compression_type" => {
                 let text = field.text().await.map_err(|e| {
+                    error!("Failed to read compression_type text: {}", e);
                     ApiError::BadRequest(format!("Failed to read compression_type: {}", e))
                 })?;
                 compression_type = text;
+                error!("Compression type: '{}'", compression_type);
             }
-            _ => {}
+            _ => {
+                error!("Unknown field: '{}'", field_name);
+            }
         }
     }
 

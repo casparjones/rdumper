@@ -73,12 +73,17 @@
               </svg>
               Test
             </button>
-            <button @click="editConfig(config)" class="btn btn-sm btn-ghost">
+            <button @click="duplicateConfig(config)" class="btn btn-sm btn-secondary" title="Duplicate Configuration">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
+              </svg>
+            </button>
+            <button @click="editConfig(config)" class="btn btn-sm btn-ghost" title="Edit Configuration">
               <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path>
               </svg>
             </button>
-            <button @click="deleteConfig(config.id)" class="btn btn-sm btn-error">
+            <button @click="deleteConfig(config.id)" class="btn btn-sm btn-error" title="Delete Configuration">
               <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
               </svg>
@@ -178,14 +183,21 @@
           <div class="form-control w-full">
             <label class="label">
               <span class="label-text font-semibold">Password</span>
+              <span v-if="isEditing" class="label-text-alt text-info">Leave empty to keep current password</span>
             </label>
             <input
                 v-model="currentConfig.password"
-                type="password"
-                placeholder="••••••••"
+                :type="showPassword ? 'text' : 'password'"
+                :placeholder="isEditing ? 'Enter new password or leave empty' : '••••••••'"
                 class="input input-bordered w-full"
-                required
+                :required="!isEditing"
             />
+            <div v-if="isEditing" class="label">
+              <label class="label cursor-pointer">
+                <span class="label-text">Show password</span>
+                <input v-model="showPassword" type="checkbox" class="checkbox checkbox-sm" />
+              </label>
+            </div>
           </div>
 
           <!-- Actions -->
@@ -236,6 +248,7 @@ const saving = ref(false)
 const error = ref(null)
 const testingConnection = ref(null)
 const testingModalConnection = ref(false)
+const showPassword = ref(false)
 
 const currentConfig = ref({
   name: '',
@@ -275,6 +288,7 @@ const openAddModal = () => {
     username: '',
     password: ''
   }
+  showPassword.value = false
   configModal.value.showModal()
 }
 
@@ -282,14 +296,30 @@ const editConfig = (config) => {
   isEditing.value = true
   currentConfig.value = { 
     ...config, 
-    password: '' // Don't show existing password for security
+    password: '' // Start with empty password, user can choose to change it
   }
+  showPassword.value = false
+  configModal.value.showModal()
+}
+
+const duplicateConfig = (config) => {
+  isEditing.value = false
+  currentConfig.value = {
+    name: `${config.name} (Copy)`,
+    host: config.host,
+    port: config.port,
+    database_name: config.database_name,
+    username: config.username,
+    password: '' // User needs to enter password for new config
+  }
+  showPassword.value = false
   configModal.value.showModal()
 }
 
 const closeModal = () => {
   configModal.value.close()
   error.value = null
+  showPassword.value = false
 }
 
 // Computed property to check if we can test connection in modal
@@ -297,8 +327,8 @@ const canTestConnection = computed(() => {
   return currentConfig.value.host && 
          currentConfig.value.port && 
          currentConfig.value.username && 
-         currentConfig.value.password && 
-         currentConfig.value.database_name
+         currentConfig.value.database_name &&
+         (currentConfig.value.password || isEditing.value) // Password required for new configs, optional for editing
 })
 
 const saveConfig = async () => {

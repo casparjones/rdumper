@@ -45,6 +45,7 @@
                 <th>Schedule</th>
                 <th>Compression</th>
                 <th>Cleanup</th>
+                <th>MyISAM</th>
                 <th>Status</th>
                 <th>Actions</th>
               </tr>
@@ -66,6 +67,14 @@
                   <div class="badge badge-outline">{{ task.compression_type }}</div>
                 </td>
                 <td>{{ task.cleanup_days }} days</td>
+                <td>
+                  <div v-if="task.use_non_transactional" class="badge badge-warning">
+                    ⚠️ MyISAM
+                  </div>
+                  <div v-else class="badge badge-ghost">
+                    InnoDB
+                  </div>
+                </td>
                 <td>
                   <div :class="['badge', task.is_active ? 'badge-success' : 'badge-error']">
                     {{ task.is_active ? '✅ Active' : '❌ Inactive' }}
@@ -192,6 +201,27 @@
             </div>
           </div>
 
+          <!-- Non-Transactional Tables Option -->
+          <div class="form-control w-full">
+            <label class="label cursor-pointer">
+              <span class="label-text font-semibold">⚠️ Use Non-Transactional Tables (MyISAM)</span>
+              <input 
+                v-model="currentTask.use_non_transactional" 
+                type="checkbox" 
+                class="checkbox checkbox-warning" 
+              />
+            </label>
+            <div v-if="currentTask.use_non_transactional" class="alert alert-warning mt-2">
+              <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z"></path>
+              </svg>
+              <div>
+                <div class="font-semibold">Warning!</div>
+                <div class="text-sm">Non-transactional tables will also be backed up, but without guarantees that they have the same state as the rest of the data.</div>
+              </div>
+            </div>
+          </div>
+
           <!-- Actions -->
           <div class="modal-action">
             <button type="button" @click="closeModal" class="btn btn-outline" :disabled="saving">
@@ -235,7 +265,8 @@ const currentTask = ref({
   database_config_id: '',
   cron_schedule: '',
   compression_type: 'gzip',
-  cleanup_days: 30
+  cleanup_days: 30,
+  use_non_transactional: false
 })
 
 // Load data
@@ -277,7 +308,8 @@ const openAddModal = () => {
     database_config_id: '',
     cron_schedule: '0 2 * * *',
     compression_type: 'gzip',
-    cleanup_days: 30
+    cleanup_days: 30,
+    use_non_transactional: false
   }
   modalError.value = null
   taskModal.value.showModal()
@@ -291,7 +323,8 @@ const editTask = (task) => {
     database_config_id: task.database_config_id,
     cron_schedule: task.cron_schedule,
     compression_type: task.compression_type,
-    cleanup_days: task.cleanup_days
+    cleanup_days: task.cleanup_days,
+    use_non_transactional: task.use_non_transactional || false
   }
   modalError.value = null
   taskModal.value.showModal()
@@ -314,7 +347,8 @@ const saveTask = async () => {
         name: currentTask.value.name,
         cron_schedule: currentTask.value.cron_schedule,
         compression_type: currentTask.value.compression_type,
-        cleanup_days: currentTask.value.cleanup_days
+        cleanup_days: currentTask.value.cleanup_days,
+        use_non_transactional: currentTask.value.use_non_transactional
       }
       
       const response = await tasksApi.update(currentTask.value.id, updateData)

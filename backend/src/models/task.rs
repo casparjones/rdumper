@@ -50,6 +50,7 @@ pub struct Task {
     pub cron_schedule: String,
     pub compression_type: String,
     pub cleanup_days: i32,
+    pub use_non_transactional: bool,
     pub is_active: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -62,6 +63,7 @@ pub struct CreateTaskRequest {
     pub cron_schedule: String,
     pub compression_type: Option<CompressionType>,
     pub cleanup_days: Option<i32>,
+    pub use_non_transactional: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -70,6 +72,7 @@ pub struct UpdateTaskRequest {
     pub cron_schedule: Option<String>,
     pub compression_type: Option<CompressionType>,
     pub cleanup_days: Option<i32>,
+    pub use_non_transactional: Option<bool>,
     pub is_active: Option<bool>,
 }
 
@@ -83,6 +86,7 @@ impl Task {
             cron_schedule: req.cron_schedule,
             compression_type: req.compression_type.unwrap_or_default().to_string(),
             cleanup_days: req.cleanup_days.unwrap_or(30),
+            use_non_transactional: req.use_non_transactional.unwrap_or(false),
             is_active: true,
             created_at: now,
             updated_at: now,
@@ -101,6 +105,9 @@ impl Task {
         }
         if let Some(cleanup_days) = req.cleanup_days {
             self.cleanup_days = cleanup_days;
+        }
+        if let Some(use_non_transactional) = req.use_non_transactional {
+            self.use_non_transactional = use_non_transactional;
         }
         if let Some(is_active) = req.is_active {
             self.is_active = is_active;

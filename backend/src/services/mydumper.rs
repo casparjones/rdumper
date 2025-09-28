@@ -67,6 +67,11 @@ impl MydumperService {
             .arg("--events")
             .arg("--routines");
 
+        // Add non-transactional tables option if enabled
+        if task.use_non_transactional {
+            cmd.arg("--trx-tables").arg("0");
+        }
+
         // Add compression if specified
         let compression = task.compression_type().unwrap_or(CompressionType::Gzip);
         match compression {

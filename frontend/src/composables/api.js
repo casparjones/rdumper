@@ -230,17 +230,41 @@ export const backupsApi = {
     formData.append('database_config_id', databaseConfigId)
     formData.append('compression_type', compressionType)
 
-    const response = await fetch(`${apiClient.baseUrl}/api/backups/upload`, {
-      method: 'POST',
-      body: formData,
-    })
+    console.log('Uploading file:', file.name, 'Size:', file.size)
+    console.log('Database config ID:', databaseConfigId)
+    console.log('Compression type:', compressionType)
 
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({ error: 'Unknown error' }))
-      throw new Error(errorData.error || `HTTP ${response.status}`)
+    try {
+      const response = await fetch(`${apiClient.baseUrl}/api/backups/upload`, {
+        method: 'POST',
+        body: formData,
+        // Don't set Content-Type header - let the browser set it with boundary
+      })
+
+      console.log('Response status:', response.status)
+      console.log('Response headers:', Object.fromEntries(response.headers.entries()))
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        console.error('Upload failed - response text:', errorText)
+        
+        let errorData
+        try {
+          errorData = JSON.parse(errorText)
+        } catch (e) {
+          errorData = { error: errorText || 'Unknown error' }
+        }
+        
+        throw new Error(errorData.error || `HTTP ${response.status}`)
+      }
+
+      const result = await response.json()
+      console.log('Upload successful:', result)
+      return result
+    } catch (error) {
+      console.error('Upload error:', error)
+      throw error
     }
-
-    return await response.json()
   }
 }
 

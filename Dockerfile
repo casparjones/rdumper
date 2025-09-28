@@ -87,7 +87,7 @@ USER rdumper
 EXPOSE 3000
 
 # Volumes für Config DB und Backups
-VOLUME ["/app/data"]
+VOLUME ["/data"]
 
 # Environment variables
 ENV RUST_LOG=info
@@ -97,8 +97,8 @@ ENV LOG_DIR=/data/logs
 ENV STATIC_DIR=/app/static
 
 # Health check (auskommentiert, weil /api/system 404 liefert)
-# HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-#     CMD wget --no-verbose --tries=1 --spider http://localhost:3000/health || exit 1
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD wget --no-verbose --tries=1 --spider http://localhost:3000/api/health || exit 1
 
 # Start the application
 CMD ["./rdumper-backend", "--host", "0.0.0.0", "--port", "3000", "--database-url", "sqlite:///data/rdumper.db", "--backup-dir", "/data/backups", "--log-dir", "/data/logs", "--static-dir", "/app/static"]

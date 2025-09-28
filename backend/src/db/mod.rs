@@ -46,6 +46,7 @@ async fn run_migrations(pool: &SqlitePool) -> Result<()> {
             cron_schedule TEXT NOT NULL,
             compression_type TEXT NOT NULL DEFAULT 'gzip',
             cleanup_days INTEGER NOT NULL DEFAULT 30,
+            use_non_transactional BOOLEAN NOT NULL DEFAULT 0,
             is_active BOOLEAN NOT NULL DEFAULT 1,
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -55,6 +56,16 @@ async fn run_migrations(pool: &SqlitePool) -> Result<()> {
     )
         .execute(pool)
         .await?;
+
+    // Add use_non_transactional column to existing tasks table if it doesn't exist
+    sqlx::query(
+        r#"
+        ALTER TABLE tasks ADD COLUMN use_non_transactional BOOLEAN NOT NULL DEFAULT 0
+        "#
+    )
+        .execute(pool)
+        .await
+        .ok(); // Ignore error if column already exists
 
     // Create jobs table
     sqlx::query(
