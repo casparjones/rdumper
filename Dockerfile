@@ -59,6 +59,9 @@ USER rdumper
 # Expose port
 EXPOSE 3000
 
+# Volumes für Config DB und Backups
+VOLUME ["/app/backend/data"]
+
 # Environment variables
 ENV RUST_LOG=info
 ENV DATABASE_URL=sqlite:///data/rdumper.db
