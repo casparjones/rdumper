@@ -90,36 +90,114 @@
 
     <!-- Restore Modal -->
     <div v-if="showRestoreModal" class="modal modal-open">
-      <div class="modal-box">
-        <h3 class="font-bold text-lg">Restore Backup</h3>
-        <div class="py-4">
-          <div class="form-control w-full">
-            <label class="label">
-              <span class="label-text">Database Name</span>
-            </label>
-            <input 
-              v-model="restoreForm.databaseName"
-              type="text" 
-              placeholder="Enter database name"
-              class="input input-bordered w-full"
-            />
-          </div>
-          <div class="form-control">
-            <label class="label cursor-pointer">
-              <span class="label-text">Overwrite existing database</span>
-              <input 
-                v-model="restoreForm.overwriteExisting"
-                type="checkbox" 
-                class="checkbox"
-              />
-            </label>
+      <div class="modal-box max-w-2xl">
+        <h3 class="font-bold text-lg mb-4">Restore Backup</h3>
+        
+        <!-- Backup Info -->
+        <div class="bg-base-200 p-4 rounded-lg mb-4">
+          <h4 class="font-semibold text-base-content mb-2">Backup Information</h4>
+          <div class="grid grid-cols-2 gap-2 text-sm">
+            <div><span class="font-medium">Database:</span> {{ selectedBackup?.database_name }}</div>
+            <div><span class="font-medium">Size:</span> {{ selectedBackup ? formatFileSize(selectedBackup.file_size) : '' }}</div>
+            <div><span class="font-medium">Created:</span> {{ selectedBackup ? formatDate(selectedBackup.created_at) : '' }}</div>
+            <div><span class="font-medium">Type:</span> {{ selectedBackup?.backup_type || 'Unknown' }}</div>
           </div>
         </div>
+
+        <!-- Restore Options -->
+        <div class="py-4">
+          <div class="form-control mb-4">
+            <label class="label">
+              <span class="label-text font-semibold">Restore Options</span>
+            </label>
+            
+            <!-- Radio Button: Original Database -->
+            <div class="form-control">
+              <label class="label cursor-pointer">
+                <div class="flex items-center">
+                  <input 
+                    v-model="restoreForm.restoreOption"
+                    type="radio" 
+                    value="original"
+                    class="radio radio-primary mr-3"
+                  />
+                  <div>
+                    <span class="label-text font-medium">Restore to Original Database</span>
+                    <div class="text-sm text-base-content/70">
+                      Overwrite the original database: <span class="font-mono">{{ selectedBackup?.database_name }}</span>
+                    </div>
+                  </div>
+                </div>
+              </label>
+            </div>
+
+            <!-- Radio Button: Create New Database -->
+            <div class="form-control">
+              <label class="label cursor-pointer">
+                <div class="flex items-center">
+                  <input 
+                    v-model="restoreForm.restoreOption"
+                    type="radio" 
+                    value="new"
+                    class="radio radio-primary mr-3"
+                    :disabled="!databasePermissions?.can_create_databases"
+                  />
+                  <div>
+                    <span class="label-text font-medium">Create New Database</span>
+                    <div class="text-sm text-base-content/70">
+                      <span v-if="!databasePermissions?.can_create_databases" class="text-warning">
+                        ⚠️ User doesn't have CREATE DATABASE permissions
+                      </span>
+                      <span v-else>Create a new database with a different name</span>
+                    </div>
+                  </div>
+                </div>
+              </label>
+            </div>
+          </div>
+
+          <!-- New Database Name Input -->
+          <div v-if="restoreForm.restoreOption === 'new'" class="form-control w-full mb-4">
+            <label class="label">
+              <span class="label-text">New Database Name</span>
+            </label>
+            <input 
+              v-model="restoreForm.newDatabaseName"
+              type="text" 
+              placeholder="Enter new database name"
+              class="input input-bordered w-full"
+              :class="{ 'input-error': restoreForm.newDatabaseName && !isValidDatabaseName(restoreForm.newDatabaseName) }"
+            />
+            <label v-if="restoreForm.newDatabaseName && !isValidDatabaseName(restoreForm.newDatabaseName)" class="label">
+              <span class="label-text-alt text-error">Database name can only contain letters, numbers, and underscores</span>
+            </label>
+          </div>
+
+          <!-- Database Overview -->
+          <div v-if="databasePermissions" class="bg-info/10 p-4 rounded-lg mb-4">
+            <h4 class="font-semibold text-info mb-2">Database Overview</h4>
+            <div class="grid grid-cols-2 gap-2 text-sm">
+              <div><span class="font-medium">Current Database:</span> {{ databasePermissions.current_database }}</div>
+              <div><span class="font-medium">Can Create DBs:</span> 
+                <span :class="databasePermissions.can_create_databases ? 'text-success' : 'text-error'">
+                  {{ databasePermissions.can_create_databases ? 'Yes' : 'No' }}
+                </span>
+              </div>
+              <div><span class="font-medium">Can Create Tables:</span> 
+                <span :class="databasePermissions.can_create_tables ? 'text-success' : 'text-error'">
+                  {{ databasePermissions.can_create_tables ? 'Yes' : 'No' }}
+                </span>
+              </div>
+              <div><span class="font-medium">Existing DBs:</span> {{ databasePermissions.existing_databases?.length || 0 }}</div>
+            </div>
+          </div>
+        </div>
+
         <div class="modal-action">
           <button 
             class="btn btn-primary"
             @click="confirmRestore"
-            :disabled="restoring"
+            :disabled="restoring || !canRestore"
           >
             {{ restoring ? 'Restoring...' : 'Restore' }}
           </button>
@@ -316,9 +394,14 @@ const metadataModal = ref(null)
 // Restore form
 const restoreForm = ref({
   backupId: null,
-  databaseName: '',
+  restoreOption: 'original', // 'original' or 'new'
+  newDatabaseName: '',
   overwriteExisting: false
 })
+
+// Selected backup and permissions
+const selectedBackup = ref(null)
+const databasePermissions = ref(null)
 
 // Upload form
 const uploadForm = ref({
@@ -402,20 +485,35 @@ const formatDate = (dateString) => {
   }
 }
 
-const openRestoreModal = (backup) => {
+const openRestoreModal = async (backup) => {
+  selectedBackup.value = backup
   restoreForm.value = {
     backupId: backup.id,
-    databaseName: '',
+    restoreOption: 'original',
+    newDatabaseName: '',
     overwriteExisting: false
   }
+  
+  // Load database permissions
+  try {
+    const response = await databaseConfigsApi.checkPermissions(backup.database_config_id)
+    databasePermissions.value = response.data
+  } catch (err) {
+    console.error('Failed to load database permissions:', err)
+    databasePermissions.value = null
+  }
+  
   showRestoreModal.value = true
 }
 
 const closeRestoreModal = () => {
   showRestoreModal.value = false
+  selectedBackup.value = null
+  databasePermissions.value = null
   restoreForm.value = {
     backupId: null,
-    databaseName: '',
+    restoreOption: 'original',
+    newDatabaseName: '',
     overwriteExisting: false
   }
 }
@@ -489,19 +587,49 @@ const confirmUpload = async () => {
   }
 }
 
+// Validation functions
+const isValidDatabaseName = (name) => {
+  if (!name) return false
+  // MySQL database names can contain letters, numbers, underscores, and dollar signs
+  return /^[a-zA-Z0-9_$]+$/.test(name)
+}
+
+const canRestore = computed(() => {
+  if (!selectedBackup.value) return false
+  
+  if (restoreForm.value.restoreOption === 'original') {
+    return true
+  }
+  
+  if (restoreForm.value.restoreOption === 'new') {
+    return databasePermissions.value?.can_create_databases && 
+           restoreForm.value.newDatabaseName && 
+           isValidDatabaseName(restoreForm.value.newDatabaseName)
+  }
+  
+  return false
+})
+
 const confirmRestore = async () => {
   try {
     restoring.value = true
     
-    const restoreData = {
-      new_database_name: restoreForm.value.databaseName || null,
-      overwrite_existing: restoreForm.value.overwriteExisting
+    let restoreData = {
+      overwrite_existing: restoreForm.value.restoreOption === 'original'
+    }
+    
+    // Set new database name if creating new database
+    if (restoreForm.value.restoreOption === 'new') {
+      restoreData.new_database_name = restoreForm.value.newDatabaseName
     }
     
     await backupsApi.restore(restoreForm.value.backupId, restoreData)
     
     // Show success toast
-    showToast(true, 'Restore job started successfully! 📥')
+    const message = restoreForm.value.restoreOption === 'original' 
+      ? 'Restore job started successfully! 📥'
+      : `Restore job started! Creating new database: ${restoreForm.value.newDatabaseName} 📥`
+    showToast(true, message)
     
     closeRestoreModal()
   } catch (err) {

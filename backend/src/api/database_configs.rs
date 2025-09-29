@@ -5,6 +5,7 @@ use axum::{
 };
 use serde::Deserialize;
 use sqlx::SqlitePool;
+use uuid::Uuid;
 
 use crate::models::{DatabaseConfig, CreateDatabaseConfigRequest, UpdateDatabaseConfigRequest};
 use super::{ApiError, ApiResult, success_response, paginated_response};
@@ -21,6 +22,7 @@ pub fn routes(pool: SqlitePool) -> Router {
         .route("/", get(list_database_configs).post(create_database_config))
         .route("/:id", get(get_database_config).put(update_database_config).delete(delete_database_config))
         .route("/:id/test", post(test_database_connection))
+        .route("/:id/permissions", get(check_database_permissions))
         .with_state(pool)
 }
 
@@ -186,6 +188,77 @@ async fn test_database_connection(
     Ok(success_response(serde_json::json!({
         "success": true,
         "message": "Connection test successful",
+        "timestamp": chrono::Utc::now().to_rfc3339()
+    })))
+}
+
+async fn check_database_permissions(
+    State(pool): State<SqlitePool>,
+    Path(id): Path<String>,
+) -> ApiResult<impl axum::response::IntoResponse> {
+    // Get database config
+    let config: DatabaseConfig = sqlx::query_as(
+        "SELECT * FROM database_configs WHERE id = ?"
+    )
+    .bind(&id)
+    .fetch_one(&pool)
+    .await?;
+
+    // Test connection and check permissions
+    let connection_string = format!(
+        "mysql://{}:{}@{}:{}/{}",
+        config.username,
+        config.password,
+        config.host,
+        config.port,
+        config.database_name
+    );
+
+    let pool = sqlx::MySqlPool::connect(&connection_string).await
+        .map_err(|e| ApiError::InternalError(format!("Failed to connect to database: {}", e)))?;
+
+    // Test if user can create databases by actually trying to create a test database
+    let test_db_name = format!("rdumper_test_{}", uuid::Uuid::new_v4().to_string().replace('-', "")[..8].to_string());
+    let can_create_db = sqlx::query(&format!("CREATE DATABASE IF NOT EXISTS `{}`", test_db_name))
+        .execute(&pool)
+        .await
+        .is_ok();
+    
+    // Clean up test database if we created it
+    if can_create_db {
+        let _ = sqlx::query(&format!("DROP DATABASE IF EXISTS `{}`", test_db_name))
+            .execute(&pool)
+            .await;
+    }
+
+    // Test if user can create tables by trying to create a test table
+    let test_table_name = format!("rdumper_test_{}", uuid::Uuid::new_v4().to_string().replace('-', "")[..8].to_string());
+    let can_create_tables = sqlx::query(&format!(
+        "CREATE TABLE IF NOT EXISTS `{}`.`{}` (id INT PRIMARY KEY)", 
+        config.database_name, test_table_name
+    ))
+    .execute(&pool)
+    .await
+    .is_ok();
+    
+    // Clean up test table if we created it
+    if can_create_tables {
+        let _ = sqlx::query(&format!("DROP TABLE IF EXISTS `{}`.`{}`", config.database_name, test_table_name))
+            .execute(&pool)
+            .await;
+    }
+
+    // Get list of existing databases
+    let databases: Vec<String> = sqlx::query_scalar("SHOW DATABASES")
+        .fetch_all(&pool)
+        .await
+        .unwrap_or_default();
+
+    Ok(success_response(serde_json::json!({
+        "can_create_databases": can_create_db,
+        "can_create_tables": can_create_tables,
+        "existing_databases": databases,
+        "current_database": config.database_name,
         "timestamp": chrono::Utc::now().to_rfc3339()
     })))
 }

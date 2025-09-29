@@ -329,18 +329,8 @@ async fn restore_backup(
     let metadata = backup.load_metadata().await
         .map_err(|e| ApiError::InternalError(format!("Failed to load backup metadata: {}", e)))?;
 
-    // Validate target database config if specified
-    let target_config_id = req.target_database_config_id.unwrap_or(backup.database_config_id.clone());
-    let target_config_exists: Option<(String,)> = sqlx::query_as(
-        "SELECT id FROM database_configs WHERE id = ?"
-    )
-    .bind(&target_config_id)
-    .fetch_optional(&pool)
-    .await?;
-
-    if target_config_exists.is_none() {
-        return Err(ApiError::BadRequest("Target database configuration not found".to_string()));
-    }
+    // Use the original database config for restore
+    let target_config_id = backup.database_config_id.clone();
 
     // Create a restore job
     let job_request = CreateJobRequest {

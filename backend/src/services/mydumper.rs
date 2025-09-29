@@ -343,6 +343,12 @@ impl MydumperService {
 
         let target_database = new_database_name.unwrap_or(&database_config.database_name);
 
+        // If creating a new database, create it first
+        if let Some(new_db_name) = new_database_name {
+            info!("Creating new database: {}", new_db_name);
+            self.create_database(database_config, new_db_name).await?;
+        }
+
         // Build myloader command
         let mut cmd = TokioCommand::new("myloader");
         cmd.arg("--host").arg(&database_config.host)
@@ -370,6 +376,26 @@ impl MydumperService {
 
         info!("Restore completed successfully for database: {}", target_database);
 
+        Ok(())
+    }
+
+    async fn create_database(&self, database_config: &DatabaseConfig, database_name: &str) -> Result<()> {
+        let connection_string = format!(
+            "mysql://{}:{}@{}:{}/",
+            database_config.username,
+            database_config.password,
+            database_config.host,
+            database_config.port
+        );
+
+        let pool = sqlx::MySqlPool::connect(&connection_string).await?;
+        
+        // Create the database
+        sqlx::query(&format!("CREATE DATABASE IF NOT EXISTS `{}`", database_name))
+            .execute(&pool)
+            .await?;
+        
+        info!("Database '{}' created successfully", database_name);
         Ok(())
     }
 

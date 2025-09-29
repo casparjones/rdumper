@@ -73,8 +73,6 @@ pub struct CreateBackupRequest {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RestoreRequest {
-    pub backup_id: String,
-    pub target_database_config_id: Option<String>,
     pub new_database_name: Option<String>,
     pub overwrite_existing: bool,
 }

@@ -119,6 +119,11 @@ export const databaseConfigsApi = {
   // Test database connection
   test(id) {
     return apiClient.post(`/api/database-configs/${id}/test`)
+  },
+
+  // Check database permissions
+  checkPermissions(id) {
+    return apiClient.get(`/api/database-configs/${id}/permissions`)
   }
 }
 
