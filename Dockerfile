@@ -19,11 +19,22 @@ RUN apk add --no-cache \
     openssl-libs-static \
     pkgconfig \
     sqlite-dev \
-    sqlite-static
+    sqlite-static \
+    git
 
 WORKDIR /app
 COPY backend/Cargo.toml ./
 COPY backend/src ./src
+
+# Build arguments for build-time information
+ARG GIT_COMMIT
+ARG BUILD_DATE
+ARG RUSTC_VERSION
+
+# Set build-time environment variables
+ENV GIT_COMMIT=${GIT_COMMIT}
+ENV BUILD_DATE=${BUILD_DATE}
+ENV RUSTC_VERSION=${RUSTC_VERSION}
 
 # Build the application (Alpine uses musl by default)
 RUN cargo build --release

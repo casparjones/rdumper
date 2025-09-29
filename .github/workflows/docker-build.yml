@@ -85,6 +85,19 @@ jobs:
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
 
+    - name: Setup Rust for build info
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        override: true
+
+    - name: Get build information
+      id: build-info
+      run: |
+        echo "git_commit=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+        echo "build_date=$(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> $GITHUB_OUTPUT
+        echo "rust_version=$(rustc --version)" >> $GITHUB_OUTPUT
+
     - name: Build and push Docker image
       uses: docker/build-push-action@v5
       with:
@@ -93,6 +106,10 @@ jobs:
         push: ${{ github.event_name != 'pull_request' }}
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
+        build-args: |
+          GIT_COMMIT=${{ steps.build-info.outputs.git_commit }}
+          BUILD_DATE=${{ steps.build-info.outputs.build_date }}
+          RUSTC_VERSION=${{ steps.build-info.outputs.rust_version }}
         cache-from: type=gha
         cache-to: type=gha,mode=max
 

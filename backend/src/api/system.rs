@@ -171,6 +171,12 @@ fn get_memory_info() -> serde_json::Value {
 }
 
 fn get_git_commit() -> Option<String> {
+    // Try environment variable first (set during build)
+    if let Some(commit) = option_env!("GIT_COMMIT") {
+        return Some(commit.to_string());
+    }
+    
+    // Fallback to git command (for development)
     let output = Command::new("git")
         .args(&["rev-parse", "--short", "HEAD"])
         .output();
@@ -190,6 +196,12 @@ fn get_build_date() -> Option<String> {
 }
 
 fn get_rust_version() -> String {
+    // Try environment variable first (set during build)
+    if let Some(version) = option_env!("RUSTC_VERSION") {
+        return version.to_string();
+    }
+    
+    // Fallback to runtime detection
     std::env::var("RUSTC_VERSION").unwrap_or_else(|_| "Unknown".to_string())
 }
 
