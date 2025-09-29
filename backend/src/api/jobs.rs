@@ -284,7 +284,7 @@ async fn get_job_logs(
     use crate::services::mydumper::MydumperService;
     
     // Create mydumper service instance
-    let backup_dir = std::env::var("BACKUP_DIR").unwrap_or_else(|_| "data/backup".to_string());
+    let backup_dir = std::env::var("BACKUP_DIR").unwrap_or_else(|_| "data/backups".to_string());
     let log_dir = std::env::var("LOG_DIR").unwrap_or_else(|_| "data/logs".to_string());
     let mydumper_service = MydumperService::new(backup_dir, log_dir);
     

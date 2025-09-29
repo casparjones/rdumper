@@ -68,9 +68,9 @@ RUN apk add --no-cache \
 
 # Create app user and directories with proper permissions
 RUN adduser -D -s /bin/false rdumper && \
-    mkdir -p /data/backups /data/logs /app/static && \
-    chown -R rdumper:rdumper /data /app && \
-    chmod 755 /data /data/backups /data/logs
+    mkdir -p /app/data/backups /app/data/logs /app/data/db /app/static && \
+    chown -R rdumper:rdumper /app && \
+    chmod 755 /app/data /app/data/backups /app/data/logs /app/data/db
 
 WORKDIR /app
 
@@ -90,13 +90,13 @@ USER rdumper
 EXPOSE 3000
 
 # Volumes für Config DB und Backups
-VOLUME ["/data"]
+VOLUME ["/app/data"]
 
-# Environment variables
+# Environment variables (defaults - can be overridden by CapRover)
 ENV RUST_LOG=info
-ENV DATABASE_URL=sqlite:///data/rdumper.db
-ENV BACKUP_DIR=/data/backups
-ENV LOG_DIR=/data/logs
+ENV DATABASE_URL=sqlite:///app/data/rdumper.db
+ENV BACKUP_DIR=/app/data/backups
+ENV LOG_DIR=/app/data/logs
 ENV STATIC_DIR=/app/static
 
 # Health check (auskommentiert, weil /api/system 404 liefert)
@@ -104,4 +104,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD wget --no-verbose --tries=1 --spider http://localhost:3000/api/health || exit 1
 
 # Start the application
-CMD ["./rdumper-backend", "--host", "0.0.0.0", "--port", "3000", "--database-url", "sqlite:///data/rdumper.db", "--backup-dir", "/data/backups", "--log-dir", "/data/logs", "--static-dir", "/app/static"]
+CMD ["./rdumper-backend", "--host", "0.0.0.0", "--port", "3000", "--database-url", "${DATABASE_URL}", "--backup-dir", "${BACKUP_DIR}", "--log-dir", "${LOG_DIR}", "--static-dir", "${STATIC_DIR}"]

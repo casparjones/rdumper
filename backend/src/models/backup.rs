@@ -1,7 +1,17 @@
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Deserializer};
 use std::path::Path;
 use uuid::Uuid;
+
+fn deserialize_datetime_string<'de, D>(deserializer: D) -> Result<DateTime<Utc>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    DateTime::parse_from_rfc3339(&s)
+        .map_err(serde::de::Error::custom)
+        .map(|dt| dt.with_timezone(&Utc))
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Backup {
@@ -13,7 +23,7 @@ pub struct Backup {
     pub meta_path: String,
     pub file_size: i64,
     pub compression_type: String,
-    pub created_at: DateTime<Utc>,
+    pub created_at: String,
     pub backup_type: String, // "manual", "scheduled", "uploaded"
 }
 
@@ -27,7 +37,7 @@ pub struct BackupMetadata {
     pub meta_path: String,
     pub file_size: i64,
     pub compression_type: String,
-    pub created_at: DateTime<Utc>,
+    pub created_at: String,
     pub backup_type: String,
     pub ident: Option<String>,
     pub database_config: DatabaseConfigInfo,
@@ -89,7 +99,7 @@ impl Backup {
             meta_path,
             file_size,
             compression_type,
-            created_at: Utc::now(),
+            created_at: Utc::now().to_rfc3339(),
             backup_type,
         }
     }
@@ -146,7 +156,11 @@ impl Backup {
     /// Get backup age in days
     pub fn age_days(&self) -> i64 {
         let now = Utc::now();
-        (now - self.created_at).num_days()
+        if let Ok(created_at) = DateTime::parse_from_rfc3339(&self.created_at) {
+            (now - created_at.with_timezone(&Utc)).num_days()
+        } else {
+            0
+        }
     }
 }
 
@@ -165,7 +179,7 @@ impl BackupMetadata {
             meta_path: backup.meta_path.clone(),
             file_size: backup.file_size,
             compression_type: backup.compression_type.clone(),
-            created_at: backup.created_at,
+            created_at: backup.created_at.clone(),
             backup_type: backup.backup_type.clone(),
             ident: None, // Will be set when calculating hash
             database_config,

@@ -110,7 +110,7 @@ impl BackupProcess {
             meta_path: self.meta_file.to_string_lossy().to_string(),
             file_size: 0, // Will be set when archive is created
             compression_type: self.compression_type.clone(),
-            created_at: Utc::now(),
+            created_at: Utc::now().to_rfc3339(),
             backup_type: self.backup_type.clone(),
             ident: None, // Will be set when archive is created
             database_config: database_config_info,

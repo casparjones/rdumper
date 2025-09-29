@@ -45,7 +45,7 @@ async fn list_backups(
 
     // Initialize filesystem backup service
     let backup_service = FilesystemBackupService::new(
-        std::env::var("BACKUP_BASE_DIR").unwrap_or_else(|_| "data/backups".to_string())
+        std::env::var("BACKUP_DIR").unwrap_or_else(|_| "data/backups".to_string())
     );
 
     // Scan filesystem for backups
@@ -81,7 +81,7 @@ async fn get_backup(
 ) -> ApiResult<impl axum::response::IntoResponse> {
     // Initialize filesystem backup service
     let backup_service = FilesystemBackupService::new(
-        std::env::var("BACKUP_BASE_DIR").unwrap_or_else(|_| "data/backups".to_string())
+        std::env::var("BACKUP_DIR").unwrap_or_else(|_| "data/backups".to_string())
     );
 
     // Scan filesystem for backups
@@ -212,7 +212,7 @@ async fn upload_backup(
 
     // Initialize filesystem backup service
     let backup_service = FilesystemBackupService::new(
-        std::env::var("BACKUP_BASE_DIR").unwrap_or_else(|_| "data/backups".to_string())
+        std::env::var("BACKUP_DIR").unwrap_or_else(|_| "data/backups".to_string())
     );
 
     // For uploaded files, we need to extract them first if they are archives
@@ -282,7 +282,7 @@ async fn delete_backup(
 ) -> ApiResult<impl axum::response::IntoResponse> {
     // Initialize filesystem backup service
     let backup_service = FilesystemBackupService::new(
-        std::env::var("BACKUP_BASE_DIR").unwrap_or_else(|_| "data/backups".to_string())
+        std::env::var("BACKUP_DIR").unwrap_or_else(|_| "data/backups".to_string())
     );
 
     // Scan filesystem for backups
@@ -308,7 +308,7 @@ async fn restore_backup(
 ) -> ApiResult<impl axum::response::IntoResponse> {
     // Initialize filesystem backup service
     let backup_service = FilesystemBackupService::new(
-        std::env::var("BACKUP_BASE_DIR").unwrap_or_else(|_| "data/backups".to_string())
+        std::env::var("BACKUP_DIR").unwrap_or_else(|_| "data/backups".to_string())
     );
 
     // Scan filesystem for backups
@@ -374,7 +374,7 @@ async fn restore_backup(
     // Start the actual restore process using myloader
     let pool_clone = pool.clone();
     let mydumper_service = crate::services::MydumperService::new(
-        std::env::var("BACKUP_BASE_DIR").unwrap_or_else(|_| "data/backups".to_string()),
+        std::env::var("BACKUP_DIR").unwrap_or_else(|_| "data/backups".to_string()),
         std::env::var("LOG_BASE_DIR").unwrap_or_else(|_| "backend/data/logs".to_string()),
     );
 
@@ -459,7 +459,7 @@ async fn download_backup(
 ) -> Result<Response<Body>, ApiError> {
     // Initialize filesystem backup service
     let backup_service = FilesystemBackupService::new(
-        std::env::var("BACKUP_BASE_DIR").unwrap_or_else(|_| "data/backups".to_string())
+        std::env::var("BACKUP_DIR").unwrap_or_else(|_| "data/backups".to_string())
     );
 
     // Scan filesystem for backups
@@ -509,7 +509,7 @@ async fn cleanup_old_backups(
 
     // Initialize filesystem backup service
     let backup_service = FilesystemBackupService::new(
-        std::env::var("BACKUP_BASE_DIR").unwrap_or_else(|_| "data/backups".to_string())
+        std::env::var("BACKUP_DIR").unwrap_or_else(|_| "data/backups".to_string())
     );
 
     // Scan filesystem for backups
@@ -518,7 +518,13 @@ async fn cleanup_old_backups(
 
     // Filter old backups
     let old_backups: Vec<Backup> = all_backups.into_iter()
-        .filter(|backup| backup.created_at < cutoff_date)
+        .filter(|backup| {
+            if let Ok(created_at) = chrono::DateTime::parse_from_rfc3339(&backup.created_at) {
+                created_at.with_timezone(&chrono::Utc) < cutoff_date
+            } else {
+                false
+            }
+        })
         .collect();
 
     let mut deleted_count = 0;
@@ -557,7 +563,7 @@ async fn update_metadata(
 ) -> ApiResult<impl axum::response::IntoResponse> {
     // Initialize filesystem backup service
     let backup_service = FilesystemBackupService::new(
-        std::env::var("BACKUP_BASE_DIR").unwrap_or_else(|_| "data/backups".to_string())
+        std::env::var("BACKUP_DIR").unwrap_or_else(|_| "data/backups".to_string())
     );
 
     // Find the backup

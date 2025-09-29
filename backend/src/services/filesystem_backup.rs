@@ -62,15 +62,19 @@ impl FilesystemBackupService {
 
     /// Recursively scan directory for backup files
     async fn scan_directory_recursive(&self, dir_path: &Path, backups: &mut Vec<Backup>) -> Result<()> {
+        tracing::info!("Scanning directory: {:?}", dir_path);
         let mut entries = fs::read_dir(dir_path).await?;
         
         while let Some(entry) = entries.next_entry().await? {
             let path = entry.path();
             
             if path.is_dir() {
+                tracing::info!("Found directory: {:?}", path);
                 // Check if this is a backup folder (contains rdumper.backup.json)
                 let meta_file = path.join("rdumper.backup.json");
+                tracing::info!("Checking for metadata file: {:?}", meta_file);
                 if meta_file.exists() {
+                    tracing::info!("Found metadata file, processing backup folder");
                     // This is a backup folder, load its metadata
                     match self.load_backup_metadata(&meta_file).await {
                         Ok(metadata) => {

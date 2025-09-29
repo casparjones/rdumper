@@ -249,7 +249,7 @@ async fn run_task_now(
     .await?;
 
     // Initialize mydumper service
-    let backup_dir = std::env::var("BACKUP_DIR").unwrap_or_else(|_| "data/backup".to_string());
+    let backup_dir = std::env::var("BACKUP_DIR").unwrap_or_else(|_| "data/backups".to_string());
     let log_dir = std::env::var("LOG_DIR").unwrap_or_else(|_| "data/logs".to_string());
     let mydumper_service = MydumperService::new(backup_dir, log_dir);
 
