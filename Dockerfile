@@ -103,5 +103,10 @@ ENV STATIC_DIR=/app/static
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD wget --no-verbose --tries=1 --spider http://localhost:3000/api/health || exit 1
 
+# Create startup script
+RUN echo '#!/bin/sh' > /app/start.sh && \
+    echo 'exec ./rdumper-backend --host 0.0.0.0 --port 3000 --database-url "$DATABASE_URL" --backup-dir "$BACKUP_DIR" --log-dir "$LOG_DIR" --static-dir "$STATIC_DIR"' >> /app/start.sh && \
+    chmod +x /app/start.sh
+
 # Start the application
-CMD ["./rdumper-backend", "--host", "0.0.0.0", "--port", "3000", "--database-url", "${DATABASE_URL}", "--backup-dir", "${BACKUP_DIR}", "--log-dir", "${LOG_DIR}", "--static-dir", "${STATIC_DIR}"]
+CMD ["/app/start.sh"]
