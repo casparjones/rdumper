@@ -56,6 +56,9 @@ FROM alpine:latest
 
 # Install runtime dependencies (for rdumper and mydumper)
 RUN apk add --no-cache \
+    tar \
+    gzip \
+    zstd \
     ca-certificates \
     wget \
     sqlite \
