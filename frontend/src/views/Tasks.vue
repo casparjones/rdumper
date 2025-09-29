@@ -11,13 +11,8 @@
       </button>
     </div>
 
-    <!-- Loading State -->
-    <div v-if="loading" class="flex justify-center items-center py-12">
-      <span class="loading loading-spinner loading-lg"></span>
-    </div>
-
     <!-- Error State -->
-    <div v-else-if="error" class="alert alert-error mb-6">
+    <div v-if="error" class="alert alert-error mb-6">
       <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
       </svg>
@@ -26,7 +21,7 @@
     </div>
 
     <!-- Empty State -->
-    <div v-else-if="tasks.length === 0" class="text-center py-12">
+    <div v-else-if="!loading && tasks.length === 0" class="text-center py-12">
       <div class="text-6xl mb-4">⏰</div>
       <h3 class="text-lg font-semibold text-base-content/70 mb-2">No backup tasks configured</h3>
       <p class="text-base-content/50 mb-4">Create your first automated backup task to get started.</p>
@@ -34,7 +29,7 @@
     </div>
 
     <!-- Tasks Table -->
-    <div v-else class="card bg-base-200 shadow-xl">
+    <div v-else-if="!loading" class="card bg-base-200 shadow-xl">
       <div class="card-body">
         <div class="overflow-x-auto">
           <table class="table">
@@ -95,8 +90,7 @@
                       :disabled="runningTask === task.id"
                       title="Run Now"
                     >
-                      <span v-if="runningTask === task.id" class="loading loading-spinner loading-xs"></span>
-                      <span v-else>▶️</span>
+                      ▶️
                     </button>
                     <button 
                       @click="deleteTask(task.id)" 
@@ -240,7 +234,6 @@
               ❌ Cancel
             </button>
             <button type="submit" class="btn btn-primary" :disabled="saving">
-              <span v-if="saving" class="loading loading-spinner loading-sm"></span>
               {{ saving ? '💾 Saving...' : (isEditing ? '💾 Update' : '💾 Create') }}
             </button>
           </div>
@@ -257,6 +250,9 @@
 import { ref, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { tasksApi, databaseConfigsApi } from '@/composables/api.js'
+import { useLoading } from '@/stores/loading.js'
+
+const { startLoading, stopLoading } = useLoading()
 
 // Router
 const router = useRouter()
@@ -285,6 +281,7 @@ const currentTask = ref({
 // Load data
 const loadTasks = async () => {
   try {
+    startLoading('tasks')
     loading.value = true
     error.value = null
     const response = await tasksApi.list()
@@ -299,6 +296,7 @@ const loadTasks = async () => {
     error.value = err.message
   } finally {
     loading.value = false
+    stopLoading('tasks')
   }
 }
 

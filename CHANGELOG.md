@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2025-09-29
+
+### Added
+- **Knight Rider Loading Effect**: Replaced loading spinners with animated light bar that moves left-to-right like Knight Rider
+- **Global Loading System**: Centralized loading management with smooth transitions and no page flashing
+- **SPA Fallback Support**: Backend now serves index.html for all non-API routes to support Vue Router
+- **Real-time System Information**: System tab now displays live OS, kernel, uptime, memory, and disk space data
+- **Enhanced Dashboard**: Real-time statistics with recent backups and next scheduled tasks
+- **Progress Tracking**: On-the-fly log parsing for accurate job progress without database flooding
+
+### Changed
+- **Loading UX**: Removed all local loading spinners in favor of global progress bar
+- **Page Transitions**: Pages only display content when data is loaded, preventing default page flashing
+- **Backend Architecture**: Improved static file serving with SPA fallback for Docker deployment
+- **Job Status**: Added "compressing" status to show when MyDumper is done but archive is being created
+
+### Fixed
+- **Vue Template Errors**: Resolved v-else without v-if compilation errors
+- **Loading States**: Consistent loading behavior across all views
+- **File Cleanup**: Removed unused filesystem_backup_fixed.rs and filesystem_backup_old.rs
+
+### Technical Improvements
+- **Frontend**: Global loading store with multi-page support
+- **Backend**: SPA fallback middleware for proper Vue Router support
+- **UI/UX**: Smooth transitions and professional loading animations
+- **Code Quality**: Removed unused imports and dead code
+
+## [Unreleased]
+
 ### Added
 - Authors section in README with project contributors
 - CHANGELOG.md for tracking project changes

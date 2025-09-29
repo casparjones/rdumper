@@ -163,7 +163,7 @@ async fn test_backup_process_completes_successfully() {
     
     assert_eq!(metadata.database_name, "testdb");
     assert_eq!(metadata.compression_type, "gzip");
-    assert!(metadata.sha256_hash.is_some(), "SHA-256 hash should be calculated");
+    assert!(metadata.ident.is_some(), "File identifier should be calculated");
     assert!(metadata.file_size > 0, "File size should be greater than 0");
     assert_eq!(metadata.file_path, backup_file.path().to_string_lossy());
 }

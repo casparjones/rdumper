@@ -3,7 +3,6 @@ use std::path::{Path, PathBuf};
 use std::fs;
 use tokio::fs as async_fs;
 use chrono::Utc;
-use sha2::{Sha256, Digest};
 use serde::{Serialize, Deserialize};
 
 use crate::models::{DatabaseConfig, Task, BackupMetadata, DatabaseConfigInfo, TaskInfo};
@@ -69,17 +68,15 @@ impl BackupProcess {
         // Create backup archive
         let archive_path = self.create_archive().await?;
         
-        // Calculate SHA-256 hash
-        let sha256_hash = self.calculate_sha256_hash(&archive_path).await?;
-        
-        // Get file size
+        // Get file size and modification time
         let metadata = async_fs::metadata(&archive_path).await?;
         let file_size = metadata.len() as i64;
+        let file_modified = metadata.modified().unwrap_or_else(|_| std::time::SystemTime::UNIX_EPOCH);
         
-        // Update metadata with final information
-        self.update_metadata(&archive_path, file_size, sha256_hash).await?;
+        // Update metadata with file information (no hash needed)
+        self.update_metadata_fast(&archive_path, file_size, file_modified).await?;
         
-        // Clean up tmp directory
+        // Clean up tmp directory immediately
         self.cleanup_tmp().await?;
         
         // Return the archive path as string
@@ -115,7 +112,7 @@ impl BackupProcess {
             compression_type: self.compression_type.clone(),
             created_at: Utc::now(),
             backup_type: self.backup_type.clone(),
-            sha256_hash: None, // Will be set when archive is created
+            ident: None, // Will be set when archive is created
             database_config: database_config_info,
             task_info,
         };
@@ -187,24 +184,6 @@ impl BackupProcess {
         Ok(())
     }
     
-    /// Calculate SHA-256 hash of the archive
-    async fn calculate_sha256_hash(&self, file_path: &Path) -> Result<String> {
-        let mut file = async_fs::File::open(file_path).await?;
-        let mut hasher = Sha256::new();
-        let mut buffer = [0; 8192];
-        
-        use tokio::io::AsyncReadExt;
-        
-        loop {
-            let bytes_read = file.read(&mut buffer).await?;
-            if bytes_read == 0 {
-                break;
-            }
-            hasher.update(&buffer[..bytes_read]);
-        }
-        
-        Ok(format!("{:x}", hasher.finalize()))
-    }
     
     /// Update metadata with final information
     async fn update_metadata(&self, archive_path: &Path, file_size: i64, sha256_hash: String) -> Result<()> {
@@ -214,7 +193,43 @@ impl BackupProcess {
         // Update with final information
         metadata.file_path = archive_path.to_string_lossy().to_string();
         metadata.file_size = file_size;
-        metadata.sha256_hash = Some(sha256_hash);
+        metadata.ident = Some(sha256_hash);
+        
+        let updated_content = serde_json::to_string_pretty(&metadata)?;
+        async_fs::write(&self.meta_file, updated_content).await?;
+        
+        Ok(())
+    }
+    
+    /// Update metadata without hash (for immediate response)
+    async fn update_metadata_without_hash(&self, archive_path: &Path, file_size: i64) -> Result<()> {
+        let content = async_fs::read_to_string(&self.meta_file).await?;
+        let mut metadata: BackupMetadata = serde_json::from_str(&content)?;
+        
+        // Update with file information (without hash)
+        metadata.file_path = archive_path.to_string_lossy().to_string();
+        metadata.file_size = file_size;
+        // ident remains None for now
+        
+        let updated_content = serde_json::to_string_pretty(&metadata)?;
+        async_fs::write(&self.meta_file, updated_content).await?;
+        
+        Ok(())
+    }
+    
+    /// Update metadata fast (no hash calculation)
+    async fn update_metadata_fast(&self, archive_path: &Path, file_size: i64, file_modified: std::time::SystemTime) -> Result<()> {
+        let content = async_fs::read_to_string(&self.meta_file).await?;
+        let mut metadata: BackupMetadata = serde_json::from_str(&content)?;
+        
+        // Update with file information (no hash needed)
+        metadata.file_path = archive_path.to_string_lossy().to_string();
+        metadata.file_size = file_size;
+        // Use file modification time as a simple integrity check
+        let modified_timestamp = file_modified.duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        metadata.ident = Some(format!("size_{}_modified_{}", file_size, modified_timestamp));
         
         let updated_content = serde_json::to_string_pretty(&metadata)?;
         async_fs::write(&self.meta_file, updated_content).await?;

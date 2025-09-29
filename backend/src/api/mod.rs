@@ -3,6 +3,7 @@ pub mod tasks;
 pub mod jobs;
 pub mod backups;
 pub mod system;
+pub mod dashboard;
 
 use axum::{
     http::StatusCode,
@@ -20,6 +21,7 @@ pub fn create_routes(pool: SqlitePool) -> Router {
         .nest("/api/jobs", jobs::routes(pool.clone()))
         .nest("/api/backups", backups::routes(pool.clone()))
         .nest("/api/system", system::routes())
+        .nest("/api/dashboard", dashboard::routes(pool.clone()))
         .route("/api/health", get(health_check))
 }
 

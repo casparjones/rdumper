@@ -1,5 +1,8 @@
 <template>
   <div class="min-h-screen bg-base-100">
+    <!-- Global Loading Bar -->
+    <GlobalLoading :isLoading="isLoading" />
+    
     <!-- Navigation -->
     <div class="navbar bg-base-200 shadow-lg">
       <div class="navbar-start">
@@ -32,16 +35,22 @@
       </div>
       <div class="navbar-end">
         <div class="dropdown dropdown-end">
-          <div tabindex="0" role="button" class="btn btn-ghost">
-            Theme
-            <svg class="w-4 h-4 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+          <div tabindex="0" role="button" class="btn btn-ghost normal-case">
+            <span>{{ currentTheme }}</span>
+            <svg class="ml-1 h-2 w-2 fill-current opacity-60" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24">
+              <path d="M7.41,8.58L12,13.17L16.59,8.58L18,10L12,16L6,10L7.41,8.58Z"></path>
             </svg>
           </div>
-          <ul tabindex="0" class="dropdown-content z-[1] p-2 shadow-2xl bg-base-300 rounded-box w-52">
-            <li><button class="outline-base-content overflow-hidden rounded-lg text-left" data-set-theme="light">Light</button></li>
-            <li><button class="outline-base-content overflow-hidden rounded-lg text-left" data-set-theme="dark">Dark</button></li>
-            <li><button class="outline-base-content overflow-hidden rounded-lg text-left" data-set-theme="cupcake">Cupcake</button></li>
+          
+          <ul class="dropdown-content menu bg-base-100 rounded-box w-40 mt-2 shadow">
+            <li><ThemeSelect theme-name="light" @theme-selected="setTheme" /></li>
+            <li><ThemeSelect theme-name="dark" @theme-selected="setTheme" /></li>
+            <li><ThemeSelect theme-name="cupcake" @theme-selected="setTheme" /></li>
+            <li><ThemeSelect theme-name="dim" @theme-selected="setTheme" /></li>
+            <li><ThemeSelect theme-name="valentine" @theme-selected="setTheme" /></li>
+            <li><ThemeSelect theme-name="night" @theme-selected="setTheme" /></li>
+            <li><ThemeSelect theme-name="coffee" @theme-selected="setTheme" /></li>
+            <li><ThemeSelect theme-name="luxury" @theme-selected="setTheme" /></li>
           </ul>
         </div>
       </div>
@@ -55,5 +64,31 @@
 </template>
 
 <script setup>
-// Theme switching functionality can be added here later
+import { ref, onMounted } from 'vue'
+import { useLoading } from './stores/loading.js'
+import GlobalLoading from './components/GlobalLoading.vue'
+import ThemeSelect from './components/ThemeSelect.vue'
+
+const { isLoading } = useLoading()
+
+// Theme management
+const currentTheme = ref('light')
+
+// Load theme from localStorage on mount
+onMounted(() => {
+  const savedTheme = localStorage.getItem('rdumper-theme')
+  if (savedTheme) {
+    setTheme(savedTheme)
+  } else {
+    // Default to light theme
+    setTheme('light')
+  }
+})
+
+// Set theme function
+const setTheme = (theme) => {
+  currentTheme.value = theme
+  document.documentElement.setAttribute('data-theme', theme)
+  localStorage.setItem('rdumper-theme', theme)
+}
 </script>

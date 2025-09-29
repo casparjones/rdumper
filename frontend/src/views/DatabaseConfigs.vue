@@ -13,13 +13,8 @@
       </button>
     </div>
 
-    <!-- Loading State -->
-    <div v-if="loading" class="flex justify-center items-center py-12">
-      <span class="loading loading-spinner loading-lg"></span>
-    </div>
-
     <!-- Error State -->
-    <div v-else-if="error" class="alert alert-error">
+    <div v-if="error" class="alert alert-error mb-6">
       <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
       </svg>
@@ -28,7 +23,7 @@
     </div>
 
     <!-- Empty State -->
-    <div v-else-if="configs.length === 0" class="text-center py-12">
+    <div v-else-if="!loading && configs.length === 0" class="text-center py-12">
       <svg class="w-16 h-16 mx-auto text-base-content/20 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.31 4 7.5 4s7.5-1.79 7.5-4V7c0-2.21-3.31-4-7.5-4S4 4.79 4 7z"></path>
       </svg>
@@ -38,7 +33,7 @@
     </div>
 
     <!-- Database Table -->
-    <div v-else class="card bg-base-100 shadow-xl">
+    <div v-else-if="!loading" class="card bg-base-100 shadow-xl">
       <div class="card-body p-0">
         <div class="overflow-x-auto">
           <table class="table">
@@ -89,8 +84,7 @@
                       class="btn btn-sm btn-outline"
                       title="Test Connection"
                     >
-                      <span v-if="testingConnection === config.id" class="loading loading-spinner loading-xs"></span>
-                      <svg v-else class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
                       </svg>
                     </button>
@@ -249,8 +243,7 @@
                 class="btn btn-info" 
                 :disabled="saving || testingModalConnection || !canTestConnection"
               >
-                <span v-if="testingModalConnection" class="loading loading-spinner loading-sm"></span>
-                <svg v-else class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
                 </svg>
                 Test Connection
@@ -261,7 +254,6 @@
                 Cancel
               </button>
               <button type="submit" class="btn btn-primary" :disabled="saving">
-                <span v-if="saving" class="loading loading-spinner loading-sm"></span>
                 {{ saving ? 'Saving...' : (isEditing ? 'Update' : 'Add') }}
               </button>
             </div>
@@ -279,6 +271,9 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue'
 import { databaseConfigsApi } from '@/composables/api.js'
+import { useLoading } from '@/stores/loading.js'
+
+const { startLoading, stopLoading } = useLoading()
 
 const configs = ref([])
 const configModal = ref(null)
@@ -301,6 +296,7 @@ const currentConfig = ref({
 
 const loadConfigs = async () => {
   try {
+    startLoading('databases')
     loading.value = true
     error.value = null
     const response = await databaseConfigsApi.list()
@@ -315,6 +311,7 @@ const loadConfigs = async () => {
     error.value = err.message
   } finally {
     loading.value = false
+    stopLoading('databases')
   }
 }
 

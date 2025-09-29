@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Result};
 use std::path::Path;
 use std::process::Stdio;
-use tokio::io::{AsyncBufReadExt, BufReader, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio::process::Command as TokioCommand;
 use tokio::fs::File;
 use tracing::{error, info, warn};
@@ -117,32 +117,13 @@ impl MydumperService {
         let mut log_file = File::create(&log_file_path).await?;
 
         // Update job status to running
-        self.update_job_status(pool, &job_id, "running", None, None).await?;
+        self.update_job_status(pool, &job_id, "running", None, Some(&log_file_path)).await?;
 
-        // First, run mydumper --help to show all available options
-        info!("Running mydumper --help to show available options");
-        let help_log = format!("[{}] INFO: Running mydumper --help to show available options\n", 
-            chrono::Utc::now().format("%Y-%m-%d %H:%M:%S"));
-        log_file.write_all(help_log.as_bytes()).await?;
-        log_file.flush().await?;
-
-        let help_cmd = TokioCommand::new("mydumper")
-            .arg("--help")
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?;
-
-        let help_output = help_cmd.wait_with_output().await?;
-        
-        // Log the help output
-        let help_stdout = String::from_utf8_lossy(&help_output.stdout);
-        let help_stderr = String::from_utf8_lossy(&help_output.stderr);
-        
-        let help_log_entry = format!("[{}] INFO: MyDumper Help Output:\n{}\n{}\n", 
+        // Write initial log entry
+        let start_log = format!("[{}] INFO: Starting backup for database: {}\n", 
             chrono::Utc::now().format("%Y-%m-%d %H:%M:%S"), 
-            help_stdout, 
-            help_stderr);
-        log_file.write_all(help_log_entry.as_bytes()).await?;
+            database_config.database_name);
+        log_file.write_all(start_log.as_bytes()).await?;
         log_file.flush().await?;
 
         // Build mydumper command
@@ -155,6 +136,7 @@ impl MydumperService {
             .arg("--outputdir").arg(backup_process.tmp_dir())
             .arg("--verbose").arg("3")
             .arg("--threads").arg("4")
+            .arg("--logfile").arg(&log_file_path)
             .arg("--triggers")
             .arg("--events")
             .arg("--routines");
@@ -183,101 +165,10 @@ impl MydumperService {
             }
         }
 
-        cmd.stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-
         info!("Executing mydumper command for database: {}", database_config.database_name);
 
-        // Write initial log entry
-        let start_log = format!("[{}] Starting backup for database: {}\n", 
-            chrono::Utc::now().format("%Y-%m-%d %H:%M:%S"), 
-            database_config.database_name);
-        log_file.write_all(start_log.as_bytes()).await?;
-        log_file.flush().await?;
-
-        let mut child = cmd.spawn()?;
-
-        // Read stdout and stderr asynchronously
-        let stdout = child.stdout.take().ok_or_else(|| anyhow!("Failed to capture stdout"))?;
-        let stderr = child.stderr.take().ok_or_else(|| anyhow!("Failed to capture stderr"))?;
-
-        let mut stdout_reader = BufReader::new(stdout).lines();
-        let mut stderr_reader = BufReader::new(stderr).lines();
-
-
-        // Monitor the process output
-        loop {
-            tokio::select! {
-                stdout_line = stdout_reader.next_line() => {
-                    match stdout_line? {
-                        Some(line) => {
-                            info!("mydumper stdout: {}", line);
-                            
-                            // Write to log file
-                            let log_entry = format!("[{}] {}\n", 
-                                chrono::Utc::now().format("%Y-%m-%d %H:%M:%S"), 
-                                line);
-                            log_file.write_all(log_entry.as_bytes()).await?;
-                            log_file.flush().await?;
-                            
-                            // Parse progress from mydumper output
-                            if let Some(progress) = self.parse_mydumper_progress(&line, table_count) {
-                                // Update job progress
-                                self.update_job_progress(pool, &job_id, progress).await?;
-                            }
-                        }
-                        None => break,
-                    }
-                }
-                stderr_line = stderr_reader.next_line() => {
-                    match stderr_line? {
-                        Some(line) => {
-                            // Parse stderr content to determine log level
-                            if line.starts_with("** Message:") {
-                                // These are normal informational messages from mydumper
-                                info!("mydumper: {}", line);
-                                
-                                let log_entry = format!("[{}] INFO: {}\n", 
-                                    chrono::Utc::now().format("%Y-%m-%d %H:%M:%S"), 
-                                    line);
-                                log_file.write_all(log_entry.as_bytes()).await?;
-                                log_file.flush().await?;
-                            } else if line.to_lowercase().contains("error") || 
-                                     line.to_lowercase().contains("failed") || 
-                                     line.to_lowercase().contains("fatal") {
-                                // These are actual errors
-                                error!("mydumper error: {}", line);
-                                
-                                let log_entry = format!("[{}] ERROR: {}\n", 
-                                    chrono::Utc::now().format("%Y-%m-%d %H:%M:%S"), 
-                                    line);
-                                log_file.write_all(log_entry.as_bytes()).await?;
-                                log_file.flush().await?;
-                            } else {
-                                // Other stderr output (warnings, info, etc.)
-                                info!("mydumper: {}", line);
-                                
-                                let log_entry = format!("[{}] INFO: {}\n", 
-                                    chrono::Utc::now().format("%Y-%m-%d %H:%M:%S"), 
-                                    line);
-                                log_file.write_all(log_entry.as_bytes()).await?;
-                                log_file.flush().await?;
-                                
-                                // Also parse progress from stderr
-                                if let Some(progress) = self.parse_mydumper_progress(&line, table_count) {
-                                    // Update job progress
-                                    self.update_job_progress(pool, &job_id, progress).await?;
-                                }
-                            }
-                        }
-                        None => break,
-                    }
-                }
-            }
-        }
-
-        // Wait for the process to complete
-        let status = child.wait().await?;
+        // Execute mydumper command and wait for completion
+        let status = cmd.status().await?;
 
         let completion_log = format!("[{}] mydumper process completed with status: {:?}\n", 
             chrono::Utc::now().format("%Y-%m-%d %H:%M:%S"), 
@@ -292,14 +183,16 @@ impl MydumperService {
             return Err(anyhow!("mydumper failed: {}", error_msg));
         }
 
-        info!("Backup completed successfully for database: {}", database_config.database_name);
+        info!("MyDumper completed successfully for database: {}", database_config.database_name);
+
+        // Update job status to compressing before creating archive
+        self.update_job_status(pool, &job_id, "compressing", None, Some(&log_file_path)).await?;
 
         // Complete the backup process (creates archive, calculates hash, updates metadata, cleans up tmp)
         let backup_file_path = backup_process.complete().await?;
 
         // Update job to completed
         self.update_job_status(pool, &job_id, "completed", None, Some(&log_file_path)).await?;
-        self.update_job_progress(pool, &job_id, 100).await?;
 
         // Update job with backup file path
         self.update_job_backup_path(pool, &job_id, &backup_file_path).await?;
@@ -379,14 +272,6 @@ impl MydumperService {
         Ok(())
     }
 
-    async fn update_job_progress(&self, pool: &SqlitePool, job_id: &str, progress: i32) -> Result<()> {
-        sqlx::query("UPDATE jobs SET progress = ? WHERE id = ?")
-            .bind(progress)
-            .bind(job_id)
-            .execute(pool)
-            .await?;
-        Ok(())
-    }
 
     async fn update_job_backup_path(&self, pool: &SqlitePool, job_id: &str, backup_path: &str) -> Result<()> {
         sqlx::query("UPDATE jobs SET backup_path = ? WHERE id = ?")
@@ -398,14 +283,6 @@ impl MydumperService {
     }
 
     // Method to parse logs and calculate real-time progress
-    pub async fn get_job_progress_from_logs(&self, _job_id: &str) -> Result<(i32, String)> {
-        // Try to find the log directory for this job
-        let _log_pattern = format!("{}/*/mydumper.log", self.log_base_dir);
-        
-        // This is a simplified version - in practice, you'd want to store the log path in the job
-        // For now, let's return a placeholder
-        Ok((0, "No logs found".to_string()))
-    }
 
     // Method to read logs from file
     pub async fn read_job_logs(&self, job_id: &str, pool: &SqlitePool) -> Result<String> {
@@ -481,64 +358,14 @@ impl MydumperService {
             cmd.arg("--overwrite-tables");
         }
 
-        cmd.stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-
         info!("Executing myloader command for database: {}", target_database);
 
-        let mut child = cmd.spawn()?;
-
-        // Read output similar to backup process
-        let stdout = child.stdout.take().ok_or_else(|| anyhow!("Failed to capture stdout"))?;
-        let stderr = child.stderr.take().ok_or_else(|| anyhow!("Failed to capture stderr"))?;
-
-        let mut stdout_reader = BufReader::new(stdout).lines();
-        let mut stderr_reader = BufReader::new(stderr).lines();
-
-        let mut output_log = String::new();
-
-        loop {
-            tokio::select! {
-                stdout_line = stdout_reader.next_line() => {
-                    match stdout_line? {
-                        Some(line) => {
-                            info!("myloader stdout: {}", line);
-                            output_log.push_str(&format!("{}\n", line));
-                        }
-                        None => break,
-                    }
-                }
-                stderr_line = stderr_reader.next_line() => {
-                    match stderr_line? {
-                        Some(line) => {
-                            // Parse stderr content to determine log level
-                            if line.starts_with("** Message:") {
-                                // These are normal informational messages from myloader
-                                info!("myloader: {}", line);
-                                output_log.push_str(&format!("INFO: {}\n", line));
-                            } else if line.to_lowercase().contains("error") || 
-                                     line.to_lowercase().contains("failed") || 
-                                     line.to_lowercase().contains("fatal") {
-                                // These are actual errors
-                                error!("myloader error: {}", line);
-                                output_log.push_str(&format!("ERROR: {}\n", line));
-                            } else {
-                                // Other stderr output (warnings, info, etc.)
-                                info!("myloader: {}", line);
-                                output_log.push_str(&format!("INFO: {}\n", line));
-                            }
-                        }
-                        None => break,
-                    }
-                }
-            }
-        }
-
-        let status = child.wait().await?;
+        // Execute myloader command and wait for completion
+        let status = cmd.status().await?;
 
         if !status.success() {
             error!("myloader failed with exit code: {:?}", status.code());
-            return Err(anyhow!("myloader failed: {}", output_log));
+            return Err(anyhow!("myloader failed with exit code: {:?}", status.code()));
         }
 
         info!("Restore completed successfully for database: {}", target_database);
@@ -646,31 +473,5 @@ impl MydumperService {
     // }
 
 
-    fn parse_mydumper_progress(&self, line: &str, total_tables: u32) -> Option<i32> {
-        // Variante 1: Prozentangabe aus [ XX% ]
-        if let Some(percent_start) = line.find("[ ") {
-            if let Some(percent_end) = line[percent_start + 2..].find("% ]") {
-                let percent_str = &line[percent_start + 2..percent_start + 2 + percent_end];
-                if let Ok(percent) = percent_str.trim().parse::<i32>() {
-                    return Some(percent.min(100));
-                }
-            }
-        }
-
-        // Variante 2: Tabellenfortschritt aus "Tables: X/Y"
-        if let Some(tables_start) = line.find("Tables: ") {
-            if let Some(tables_end) = line[tables_start + 8..].find("/") {
-                let current_tables_str = &line[tables_start + 8..tables_start + 8 + tables_end];
-                if let Ok(current_tables) = current_tables_str.parse::<u32>() {
-                    if total_tables > 0 {
-                        let progress = (current_tables as f64 / total_tables as f64 * 100.0) as i32;
-                        return Some(progress.min(100));
-                    }
-                }
-            }
-        }
-
-        None
-    }
 
 }

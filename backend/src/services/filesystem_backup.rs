@@ -96,8 +96,26 @@ impl FilesystemBackupService {
                         }
                     }
                 } else {
-                    // Recursively scan subdirectories that are not backup folders
-                    Box::pin(self.scan_directory_recursive(&path, backups)).await?;
+                    // Check if this directory contains backup files without metadata
+                    if let Some(backup_file) = self.find_backup_file_in_folder(&path).await? {
+                        // Found a backup file without metadata, create it
+                        info!("Found backup file without metadata: {}, creating metadata", backup_file.display());
+                        let meta_path = self.create_metadata_file_for_backup(&backup_file).await?;
+                        let backup = self.create_dummy_backup(&backup_file, &meta_path).await?;
+                        backups.push(backup);
+                    } else {
+                        // Recursively scan subdirectories that are not backup folders
+                        Box::pin(self.scan_directory_recursive(&path, backups)).await?;
+                    }
+                }
+            } else if path.is_file() {
+                // Check if this is a backup file in the root directory
+                if self.is_backup_file(&path).is_some() {
+                    // Found a backup file without metadata, create it
+                    info!("Found backup file without metadata: {}, creating metadata", path.display());
+                    let meta_path = self.create_metadata_file_for_backup(&path).await?;
+                    let backup = self.create_dummy_backup(&path, &meta_path).await?;
+                    backups.push(backup);
                 }
             }
         }
@@ -161,6 +179,12 @@ impl FilesystemBackupService {
         let backup_dir = backup_path.parent().ok_or_else(|| anyhow!("No parent directory"))?;
         let meta_file = backup_dir.join("rdumper.backup.json");
         
+        // Get file metadata
+        let file_metadata = fs::metadata(backup_path).await?;
+        let file_size = file_metadata.len() as i64;
+        let modified_time = file_metadata.modified()?;
+        let modified_timestamp = modified_time.duration_since(std::time::UNIX_EPOCH)?.as_secs();
+        
         // Determine compression type from file extension
         let compression_type = if backup_path.to_string_lossy().ends_with(".tar.zst") {
             "zstd"
@@ -172,26 +196,35 @@ impl FilesystemBackupService {
             "unknown"
         };
         
-        // Create dummy metadata
+        // Extract information from filename
+        let filename = backup_path.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown");
+        
+        // Try to extract database name and timestamp from filename
+        // Expected format: <database>-<timestamp>.tar.gz
+        let (database_name, created_at, ident) = self.parse_backup_filename(filename, file_size, modified_timestamp);
+        
+        // Create metadata with extracted information
         let dummy_metadata = serde_json::json!({
             "id": uuid::Uuid::new_v4().to_string(),
-            "database_name": "unknown",
+            "database_name": database_name,
             "database_config_id": "unknown",
             "task_id": null,
             "file_path": backup_path.to_string_lossy(),
             "meta_path": meta_file.to_string_lossy(),
-            "file_size": 0,
+            "file_size": file_size,
             "compression_type": compression_type,
-            "created_at": chrono::Utc::now().to_rfc3339(),
+            "created_at": created_at,
             "backup_type": "external",
-            "sha256_hash": null,
+            "ident": ident,
             "database_config": {
                 "id": "unknown",
-                "name": "Unknown Database",
+                "name": format!("Unknown Database ({})", database_name),
                 "host": "unknown",
                 "port": 3306,
                 "username": "unknown",
-                "database_name": "unknown"
+                "database_name": database_name
             },
             "task_info": null
         });
@@ -200,39 +233,56 @@ impl FilesystemBackupService {
         Ok(meta_file)
     }
 
+    /// Parse backup filename to extract database name, timestamp, and create ident
+    fn parse_backup_filename(&self, filename: &str, file_size: i64, modified_timestamp: u64) -> (String, String, String) {
+        // Remove file extension
+        let name_without_ext = filename
+            .replace(".tar.gz", "")
+            .replace(".tar.zst", "")
+            .replace(".tar", "");
+        
+        // Try to parse format: <database>-<timestamp>
+        // Expected format: sbtest-20250929_131944
+        if let Some(dash_pos) = name_without_ext.rfind('-') {
+            let database_name = name_without_ext[..dash_pos].to_string();
+            let timestamp_part = &name_without_ext[dash_pos + 1..];
+            
+            // Try to parse timestamp format: YYYYMMDD_HHMMSS
+            if timestamp_part.len() == 15 && timestamp_part.chars().all(|c| c.is_ascii_digit() || c == '_') {
+                // Parse the timestamp
+                if let Ok(parsed_time) = chrono::NaiveDateTime::parse_from_str(timestamp_part, "%Y%m%d_%H%M%S") {
+                    let created_at = parsed_time.and_utc().to_rfc3339();
+                    let ident = format!("size_{}_modified_{}", file_size, modified_timestamp);
+                    return (database_name, created_at, ident);
+                }
+            }
+        }
+        
+        // Fallback: use filename as database name and current time
+        let database_name = name_without_ext.to_string();
+        let created_at = chrono::Utc::now().to_rfc3339();
+        let ident = format!("size_{}_modified_{}", file_size, modified_timestamp);
+        
+        (database_name, created_at, ident)
+    }
+
     /// Create dummy backup entry
     async fn create_dummy_backup(&self, backup_path: &Path, meta_path: &Path) -> Result<Backup> {
-        let metadata = fs::metadata(backup_path).await?;
-        let file_size = metadata.len() as i64;
+        // Load the metadata we just created to get the extracted information
+        let metadata = self.load_backup_metadata(meta_path).await?;
         
-        // Determine compression type from file extension
-        let compression_type = if backup_path.to_string_lossy().ends_with(".tar.zst") {
-            "zstd".to_string()
-        } else if backup_path.to_string_lossy().ends_with(".tar.gz") {
-            "gzip".to_string()
-        } else if backup_path.to_string_lossy().ends_with(".tar") {
-            "none".to_string()
-        } else {
-            "unknown".to_string()
+        let backup = Backup {
+            id: metadata.id,
+            database_name: metadata.database_name,
+            database_config_id: metadata.database_config_id,
+            task_id: metadata.task_id,
+            file_path: backup_path.to_string_lossy().to_string(),
+            meta_path: meta_path.to_string_lossy().to_string(),
+            file_size: metadata.file_size,
+            compression_type: metadata.compression_type,
+            created_at: metadata.created_at,
+            backup_type: metadata.backup_type,
         };
-        
-        // Extract database name from path or use "unknown"
-        let database_name = backup_path.parent()
-            .and_then(|p| p.file_name())
-            .and_then(|n| n.to_str())
-            .unwrap_or("unknown")
-            .to_string();
-        
-        let backup = Backup::new(
-            database_name,
-            "unknown".to_string(),
-            None,
-            backup_path.to_string_lossy().to_string(),
-            meta_path.to_string_lossy().to_string(),
-            file_size,
-            compression_type,
-            "external".to_string(),
-        );
         
         Ok(backup)
     }
@@ -345,8 +395,13 @@ impl FilesystemBackupService {
         let metadata = fs::metadata(&backup_file_path).await?;
         let file_size = metadata.len() as i64;
         
-        // Calculate SHA-256 hash
-        let sha256_hash = backup_metadata.calculate_sha256_hash(&backup_file_path.to_string_lossy())?;
+        // Calculate file identifier (size + timestamp)
+        let file_metadata = fs::metadata(&backup_file_path).await?;
+        let file_modified = file_metadata.modified().unwrap_or_else(|_| std::time::SystemTime::UNIX_EPOCH);
+        let modified_timestamp = file_modified.duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let ident = format!("size_{}_modified_{}", file_size, modified_timestamp);
         
         // Update backup with correct file size
         let backup = Backup::new(
@@ -360,9 +415,9 @@ impl FilesystemBackupService {
             backup_type.to_string(),
         );
         
-        // Update metadata with correct file size and SHA-256 hash
+        // Update metadata with correct file size and identifier
         backup_metadata.file_size = file_size;
-        backup_metadata.sha256_hash = Some(sha256_hash);
+        backup_metadata.ident = Some(ident);
         self.save_backup_metadata(&backup_metadata).await?;
         
         // Delete tmp directory after successful backup creation

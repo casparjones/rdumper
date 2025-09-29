@@ -7,7 +7,12 @@ mod services;
 mod tests;
 
 use anyhow::Result;
-use axum::Router;
+use axum::{
+    Router,
+    response::Response,
+    http::StatusCode,
+    routing::get,
+};
 use clap::Parser;
 use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
@@ -81,10 +86,31 @@ async fn main() -> Result<()> {
     // Create API routes
     let api_routes = api::create_routes(pool.clone());
 
+    // SPA fallback handler - serves index.html for any non-API route
+    let static_dir = cli.static_dir.clone();
+    let spa_fallback = get(move || {
+        let static_dir = static_dir.clone();
+        async move {
+            let index_path = format!("{}/index.html", static_dir);
+            match std::fs::read_to_string(&index_path) {
+                Ok(content) => Response::builder()
+                    .status(StatusCode::OK)
+                    .header("Content-Type", "text/html")
+                    .body(content)
+                    .unwrap(),
+                Err(_) => Response::builder()
+                    .status(StatusCode::NOT_FOUND)
+                    .body("Frontend not found".to_string())
+                    .unwrap(),
+            }
+        }
+    });
+
     // Create main application
     let app = Router::new()
         .merge(api_routes)
-        .nest_service("/", ServeDir::new(&cli.static_dir))
+        .nest_service("/assets", ServeDir::new(&cli.static_dir))
+        .fallback(spa_fallback)
         .layer(CorsLayer::permissive());
 
     let listener = tokio::net::TcpListener::bind(format!("{}:{}", cli.host, cli.port)).await?;

@@ -81,8 +81,24 @@ async fn list_jobs(
         count_query_builder = count_query_builder.bind(task_id);
     }
 
-    let jobs: Vec<Job> = query_builder.fetch_all(&pool).await?;
+    let mut jobs: Vec<Job> = query_builder.fetch_all(&pool).await?;
     let total: (i64,) = count_query_builder.fetch_one(&pool).await?;
+
+    // Update progress for running jobs using the same logic as detailed progress
+    for job in &mut jobs {
+        if job.status == "running" || job.status == "compressing" {
+            if let Some(log_output) = &job.log_output {
+                if let Some(log_dir) = std::path::Path::new(log_output).parent() {
+                    if let Some(log_dir_str) = log_dir.to_str() {
+                        let progress_tracker = ProgressTracker::new(log_dir_str.to_string());
+                        if let Ok(detailed_progress) = progress_tracker.load_detailed_progress(&job.id).await {
+                            job.progress = detailed_progress.overall_progress as i32;
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     Ok(paginated_response(jobs, page, limit, total.0 as u64))
 }
@@ -91,7 +107,7 @@ async fn get_job(
     State(pool): State<SqlitePool>,
     Path(id): Path<String>,
 ) -> ApiResult<impl axum::response::IntoResponse> {
-    let job: Option<Job> = sqlx::query_as(
+    let mut job: Option<Job> = sqlx::query_as(
         "SELECT * FROM jobs WHERE id = ?"
     )
     .bind(&id)
@@ -99,7 +115,22 @@ async fn get_job(
     .await?;
 
     match job {
-        Some(job) => Ok(success_response(job)),
+        Some(mut job) => {
+            // Update progress for running jobs using the same logic as detailed progress
+            if job.status == "running" || job.status == "compressing" {
+                if let Some(log_output) = &job.log_output {
+                    if let Some(log_dir) = std::path::Path::new(log_output).parent() {
+                        if let Some(log_dir_str) = log_dir.to_str() {
+                            let progress_tracker = ProgressTracker::new(log_dir_str.to_string());
+                            if let Ok(detailed_progress) = progress_tracker.load_detailed_progress(&job.id).await {
+                                job.progress = detailed_progress.overall_progress as i32;
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(success_response(job))
+        },
         None => Err(ApiError::NotFound("Job not found".to_string())),
     }
 }
@@ -288,7 +319,7 @@ async fn get_job_progress(
     State(pool): State<SqlitePool>,
     Path(id): Path<String>,
 ) -> ApiResult<impl axum::response::IntoResponse> {
-    use crate::services::mydumper::MydumperService;
+    use crate::services::progress_tracker::ProgressTracker;
     
     // Get job from database
     let job: Option<Job> = sqlx::query_as(
@@ -300,32 +331,32 @@ async fn get_job_progress(
 
     let job = job.ok_or_else(|| ApiError::NotFound("Job not found".to_string()))?;
     
-    // For running jobs, try to get real-time progress from logs
+    // For running jobs, calculate progress on-the-fly from logs
     if job.status == "running" {
-        let backup_dir = std::env::var("BACKUP_DIR").unwrap_or_else(|_| "data/backup".to_string());
-        let log_dir = std::env::var("LOG_DIR").unwrap_or_else(|_| "data/logs".to_string());
-        let mydumper_service = MydumperService::new(backup_dir, log_dir);
-        
-        match mydumper_service.get_job_progress_from_logs(&id).await {
-            Ok((live_progress, _)) => {
-                // Update job progress in database if we got a live update
-                if live_progress > job.progress {
-                    let _ = sqlx::query("UPDATE jobs SET progress = ? WHERE id = ?")
-                        .bind(live_progress)
-                        .bind(&id)
-                        .execute(&pool)
-                        .await;
-                        
+        if let Some(log_output) = &job.log_output {
+            let log_dir = std::path::Path::new(log_output)
+                .parent()
+                .ok_or_else(|| ApiError::BadRequest("Invalid log path".to_string()))?
+                .to_string_lossy()
+                .to_string();
+
+            let progress_tracker = ProgressTracker::new(log_dir);
+            match progress_tracker.load_detailed_progress(&id).await {
+                Ok(detailed_progress) => {
                     return Ok(success_response(serde_json::json!({
                         "job_id": id,
-                        "progress": live_progress,
+                        "progress": detailed_progress.overall_progress,
                         "status": job.status,
-                        "updated_from_logs": true
+                        "updated_from_logs": true,
+                        "total_tables": detailed_progress.total_tables,
+                        "completed_tables": detailed_progress.completed_tables,
+                        "in_progress_tables": detailed_progress.in_progress_tables,
+                        "pending_tables": detailed_progress.pending_tables
                     })));
                 }
-            }
-            Err(_) => {
-                // Fall back to database progress
+                Err(_) => {
+                    // Fall back to database progress
+                }
             }
         }
     }
@@ -341,11 +372,27 @@ async fn get_job_progress(
 async fn list_active_jobs(
     State(pool): State<SqlitePool>,
 ) -> ApiResult<impl axum::response::IntoResponse> {
-    let jobs: Vec<Job> = sqlx::query_as(
-        "SELECT * FROM jobs WHERE status IN ('pending', 'running') ORDER BY created_at DESC"
+    let mut jobs: Vec<Job> = sqlx::query_as(
+        "SELECT * FROM jobs WHERE status IN ('pending', 'running', 'compressing') ORDER BY created_at DESC"
     )
     .fetch_all(&pool)
     .await?;
+
+    // Update progress for running jobs using the same logic as detailed progress
+    for job in &mut jobs {
+        if job.status == "running" || job.status == "compressing" {
+            if let Some(log_output) = &job.log_output {
+                if let Some(log_dir) = std::path::Path::new(log_output).parent() {
+                    if let Some(log_dir_str) = log_dir.to_str() {
+                        let progress_tracker = ProgressTracker::new(log_dir_str.to_string());
+                        if let Ok(detailed_progress) = progress_tracker.load_detailed_progress(&job.id).await {
+                            job.progress = detailed_progress.overall_progress as i32;
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     Ok(success_response(jobs))
 }

@@ -74,15 +74,16 @@ impl ProgressTracker {
         })
     }
 
-    /// Parse table progress from mydumper log
+    /// Parse table progress from mydumper log using thread tracking
     async fn parse_table_progress(&self, log_content: &str, table_names: &[String]) -> Result<Vec<TableProgress>> {
         let mut tables = Vec::new();
         
-        // Regex patterns for different log entries
-        let schema_pattern = Regex::new(r"dumping schema for `([^`]+)`")?;
-        let data_pattern = Regex::new(r"`([^`]+)` \[(\d+)%\]")?;
-        let completed_pattern = Regex::new(r"`([^`]+)` \[100%\]")?;
+        // Regex patterns for actual mydumper log format
+        // Format: 2025-09-29 14:53:21 [INFO] - Thread 3: `sbtest`.`sbtest3` [ 0% ] | Tables: 10/16
+        let data_pattern = Regex::new(r"Thread (\d+): `[^`]+`\.`([^`]+)` \[ (\d+)% \]")?;
         let error_pattern = Regex::new(r"ERROR.*`([^`]+)`")?;
+        let table_info_pattern = Regex::new(r"([^.]+)\.([^ ]+) has ~(\d+) rows")?;
+        let finished_pattern = Regex::new(r"Finished dump at:")?;
 
         // Initialize all tables as pending
         for table_name in table_names {
@@ -96,22 +97,62 @@ impl ProgressTracker {
             });
         }
 
+        // Track which thread is working on which table
+        let mut thread_to_table: std::collections::HashMap<u32, String> = std::collections::HashMap::new();
+        let mut table_to_threads: std::collections::HashMap<String, std::collections::HashSet<u32>> = std::collections::HashMap::new();
+
+        // Check if backup is finished
+        let is_finished = finished_pattern.is_match(log_content);
+        
         // Parse log lines
         for line in log_content.lines() {
-            // Check for schema dumping (table started)
-            if let Some(caps) = schema_pattern.captures(line) {
-                let table_name = caps.get(1).unwrap().as_str();
+            // Check for table info (table started)
+            if let Some(caps) = table_info_pattern.captures(line) {
+                let table_name = caps.get(2).unwrap().as_str(); // Second capture group is table name
                 if let Some(table) = tables.iter_mut().find(|t| t.name == table_name) {
                     table.status = TableStatus::InProgress;
-                    table.started_at = Some(Utc::now());
+                    if table.started_at.is_none() {
+                        table.started_at = Some(Utc::now());
+                    }
                 }
             }
 
-            // Check for data progress
+            // Check for data progress and track thread assignments
             if let Some(caps) = data_pattern.captures(line) {
-                let table_name = caps.get(1).unwrap().as_str();
-                let progress = caps.get(2).unwrap().as_str().parse::<u32>().unwrap_or(0);
+                let thread_id = caps.get(1).unwrap().as_str().parse::<u32>().unwrap_or(0);
+                let table_name = caps.get(2).unwrap().as_str();
+                let progress = caps.get(3).unwrap().as_str().parse::<u32>().unwrap_or(0);
                 
+                // Check if this thread was working on a different table before
+                if let Some(previous_table) = thread_to_table.get(&thread_id) {
+                    if previous_table != table_name {
+                        // Thread switched to a new table, mark previous table as completed if no other threads are working on it
+                        if let Some(threads) = table_to_threads.get(previous_table) {
+                            if threads.len() <= 1 {
+                                // Only this thread was working on the previous table, mark it as completed
+                                if let Some(table) = tables.iter_mut().find(|t| t.name == *previous_table) {
+                                    if !matches!(table.status, TableStatus::Error) {
+                                        table.status = TableStatus::Completed;
+                                        table.progress_percent = Some(100);
+                                        table.completed_at = Some(Utc::now());
+                                    }
+                                }
+                            }
+                            // Remove this thread from the previous table's thread set
+                            table_to_threads.get_mut(previous_table).unwrap().remove(&thread_id);
+                        }
+                    }
+                }
+                
+                // Update thread-to-table mapping
+                thread_to_table.insert(thread_id, table_name.to_string());
+                
+                // Update table-to-threads mapping
+                table_to_threads.entry(table_name.to_string())
+                    .or_insert_with(std::collections::HashSet::new)
+                    .insert(thread_id);
+                
+                // Update table progress
                 if let Some(table) = tables.iter_mut().find(|t| t.name == table_name) {
                     table.status = TableStatus::InProgress;
                     table.progress_percent = Some(progress);
@@ -121,22 +162,23 @@ impl ProgressTracker {
                 }
             }
 
-            // Check for completed tables
-            if let Some(caps) = completed_pattern.captures(line) {
-                let table_name = caps.get(1).unwrap().as_str();
-                if let Some(table) = tables.iter_mut().find(|t| t.name == table_name) {
-                    table.status = TableStatus::Completed;
-                    table.progress_percent = Some(100);
-                    table.completed_at = Some(Utc::now());
-                }
-            }
-
             // Check for errors
             if let Some(caps) = error_pattern.captures(line) {
                 let table_name = caps.get(1).unwrap().as_str();
                 if let Some(table) = tables.iter_mut().find(|t| t.name == table_name) {
                     table.status = TableStatus::Error;
                     table.error_message = Some("Error during backup".to_string());
+                }
+            }
+        }
+        
+        // If backup is finished, mark all remaining tables as completed
+        if is_finished {
+            for table in tables.iter_mut() {
+                if !matches!(table.status, TableStatus::Error) && !matches!(table.status, TableStatus::Completed) {
+                    table.status = TableStatus::Completed;
+                    table.progress_percent = Some(100);
+                    table.completed_at = Some(Utc::now());
                 }
             }
         }

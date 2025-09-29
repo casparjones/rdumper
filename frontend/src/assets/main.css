@@ -1,5 +1,7 @@
 @import "tailwindcss";
-@plugin "daisyui";
+@plugin "daisyui" {
+  themes: light --default, dark --prefersdark, dim, valentine, cupcake, night, coffee, luxury;
+}
 
 body {
   margin: 0;

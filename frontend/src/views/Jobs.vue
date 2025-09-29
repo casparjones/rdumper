@@ -7,8 +7,7 @@
       </div>
       <div class="flex gap-3">
         <button @click="refreshJobs" class="btn btn-outline" :disabled="loading">
-          <span v-if="loading" class="loading loading-spinner loading-sm"></span>
-          <span v-else>🔄</span>
+          🔄
           Refresh
         </button>
         <div class="form-control">
@@ -24,13 +23,8 @@
       </div>
     </div>
 
-    <!-- Loading State -->
-    <div v-if="loading" class="flex justify-center items-center py-12">
-      <span class="loading loading-spinner loading-lg"></span>
-    </div>
-
     <!-- Error State -->
-    <div v-else-if="error" class="alert alert-error mb-6">
+    <div v-if="error" class="alert alert-error mb-6">
       <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
       </svg>
@@ -39,7 +33,7 @@
     </div>
 
     <!-- Jobs Table -->
-    <div v-else class="card bg-base-200 shadow-xl">
+    <div v-if="!loading" class="card bg-base-200 shadow-xl">
       <div class="card-body">
         <h2 class="card-title mb-4 flex items-center">
           <span class="mr-2">📋</span>
@@ -68,7 +62,8 @@
                 v-for="job in jobs" 
                 :key="job.id" 
                 :class="{
-                  'bg-warning/10 border-l-4 border-warning': job.status === 'running' || job.status === 'pending'
+                  'bg-warning/10 border-l-4 border-warning': job.status === 'running' || job.status === 'pending',
+                  'bg-info/10 border-l-4 border-info': job.status === 'compressing'
                 }"
                 class="transition-all duration-200 ease-in-out"
               >
@@ -106,19 +101,18 @@
                   <div class="flex gap-1">
                     <!-- Cancel button for running jobs -->
                     <button 
-                      v-if="job.status === 'running' || job.status === 'pending'"
+                      v-if="job.status === 'running' || job.status === 'pending' || job.status === 'compressing'"
                       @click="cancelJob(job.id)" 
                       class="btn btn-xs btn-ghost" 
                       :disabled="cancellingJob === job.id"
                       title="Cancel Job"
                     >
-                      <span v-if="cancellingJob === job.id" class="loading loading-spinner loading-xs"></span>
-                      <span v-else>🛑</span>
+                      🛑
                     </button>
 
                     <!-- Detailed Progress button for running jobs -->
                     <button 
-                      v-if="job.status === 'running'"
+                      v-if="job.status === 'running' || job.status === 'compressing'"
                       @click="viewDetailedProgress(job)" 
                       class="btn btn-xs btn-ghost"
                       title="View Detailed Progress"
@@ -138,7 +132,7 @@
 
                     <!-- Delete button for finished jobs -->
                     <button 
-                      v-if="job.status !== 'running' && job.status !== 'pending'"
+                      v-if="job.status !== 'running' && job.status !== 'pending' && job.status !== 'compressing'"
                       @click="deleteJob(job.id)" 
                       class="btn btn-xs btn-ghost"
                       title="Delete Job"
@@ -356,6 +350,9 @@
 <script setup>
 import { ref, onMounted, computed, onUnmounted } from 'vue'
 import { jobsApi, tasksApi, databaseConfigsApi } from '@/composables/api.js'
+import { useLoading } from '@/stores/loading.js'
+
+const { startLoading, stopLoading } = useLoading()
 
 // State management
 const jobs = ref([])
@@ -411,6 +408,7 @@ const errorTables = computed(() => {
 const loadJobs = async (isInitialLoad = false) => {
   try {
     if (isInitialLoad) {
+      startLoading('jobs')
       loading.value = true
     }
     error.value = null
@@ -433,6 +431,7 @@ const loadJobs = async (isInitialLoad = false) => {
   } finally {
     if (isInitialLoad) {
       loading.value = false
+      stopLoading('jobs')
     }
   }
 }
@@ -576,6 +575,7 @@ const getStatusIcon = (status) => {
   switch (status) {
     case 'pending': return '⏳'
     case 'running': return '⚡'
+    case 'compressing': return '🗜️'
     case 'completed': return '✅'
     case 'failed': return '❌'
     case 'cancelled': return '🚫'
@@ -592,6 +592,7 @@ const getStatusBadgeClass = (status) => {
   switch (status) {
     case 'pending': return `${baseClass} badge-warning`
     case 'running': return `${baseClass} badge-info`
+    case 'compressing': return `${baseClass} badge-info`
     case 'completed': return `${baseClass} badge-success`
     case 'failed': return `${baseClass} badge-error`
     case 'cancelled': return `${baseClass} badge-neutral`
@@ -603,6 +604,7 @@ const getProgressClass = (status) => {
   switch (status) {
     case 'pending': return 'text-warning'
     case 'running': return 'text-info'
+    case 'compressing': return 'text-info'
     case 'completed': return 'text-success'
     case 'failed': return 'text-error'
     case 'cancelled': return 'text-neutral'

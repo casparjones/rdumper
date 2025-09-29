@@ -29,7 +29,7 @@ pub struct BackupMetadata {
     pub compression_type: String,
     pub created_at: DateTime<Utc>,
     pub backup_type: String,
-    pub sha256_hash: Option<String>,
+    pub ident: Option<String>,
     pub database_config: DatabaseConfigInfo,
     pub task_info: Option<TaskInfo>,
 }
@@ -167,32 +167,10 @@ impl BackupMetadata {
             compression_type: backup.compression_type.clone(),
             created_at: backup.created_at,
             backup_type: backup.backup_type.clone(),
-            sha256_hash: None, // Will be set when calculating hash
+            ident: None, // Will be set when calculating hash
             database_config,
             task_info,
         }
     }
 
-    /// Calculate SHA-256 hash of the backup file
-    pub fn calculate_sha256_hash(&mut self, file_path: &str) -> anyhow::Result<String> {
-        use std::fs::File;
-        use std::io::Read;
-        use sha2::{Sha256, Digest};
-
-        let mut file = File::open(file_path)?;
-        let mut hasher = Sha256::new();
-        let mut buffer = [0; 8192];
-
-        loop {
-            let bytes_read = file.read(&mut buffer)?;
-            if bytes_read == 0 {
-                break;
-            }
-            hasher.update(&buffer[..bytes_read]);
-        }
-
-        let hash = format!("{:x}", hasher.finalize());
-        self.sha256_hash = Some(hash.clone());
-        Ok(hash)
-    }
 }

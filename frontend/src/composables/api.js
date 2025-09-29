@@ -284,6 +284,57 @@ export const systemApi = {
 
   health() {
     return apiClient.get('/api/health')
+  },
+
+  // System API
+  async getSystemInfo() {
+    try {
+      const response = await apiClient.request('/api/system/info')
+      return response
+    } catch (error) {
+      console.error('Failed to fetch system info:', error)
+      return { success: false, error: error.message }
+    }
+  },
+
+  async getVersionInfo() {
+    try {
+      const response = await apiClient.request('/api/system/version')
+      return response
+    } catch (error) {
+      console.error('Failed to fetch version info:', error)
+      return { success: false, error: error.message }
+    }
+  },
+
+  async getHealthStatus() {
+    try {
+      const response = await apiClient.request('/api/system/health')
+      return response
+    } catch (error) {
+      console.error('Failed to fetch health status:', error)
+      return { success: false, error: error.message }
+    }
+  },
+
+  async getMyDumperVersion() {
+    try {
+      const response = await apiClient.request('/api/system/mydumper/version')
+      return response
+    } catch (error) {
+      console.error('Failed to fetch mydumper version:', error)
+      return { success: false, error: error.message }
+    }
+  },
+
+  async getMyLoaderVersion() {
+    try {
+      const response = await apiClient.request('/api/system/myloader/version')
+      return response
+    } catch (error) {
+      console.error('Failed to fetch myloader version:', error)
+      return { success: false, error: error.message }
+    }
   }
 }
 
@@ -291,30 +342,34 @@ export const systemApi = {
 export const dashboardApi = {
   async getStats() {
     try {
-      const [configs, tasks, jobs] = await Promise.all([
-        databaseConfigsApi.list(),
-        tasksApi.list(),
-        jobsApi.list({ limit: 100 })
-      ])
-
-      // Calculate stats from the API responses
-      const stats = {
-        databases: configs.data?.length || 0,
-        activeTasks: tasks.data?.filter(task => task.enabled)?.length || 0,
-        recentBackups: jobs.data?.filter(job => 
-          job.type === 'backup' && 
-          new Date(job.created_at) > new Date(Date.now() - 24 * 60 * 60 * 1000)
-        )?.length || 0,
-        runningJobs: jobs.data?.filter(job => job.status === 'running')?.length || 0
-      }
-
-      return { success: true, data: stats }
+      const response = await apiClient.request('/api/dashboard/stats')
+      return response
     } catch (error) {
       console.error('Failed to fetch dashboard stats:', error)
       return { 
         success: false, 
-        data: { databases: 0, activeTasks: 0, recentBackups: 0, runningJobs: 0 } 
+        data: { databases: 0, activeTasks: 0, recentBackups: 0, runningJobs: 0, backupFiles: 0, tasks: 0, totalJobs: 0 } 
       }
+    }
+  },
+
+  async getRecentBackups() {
+    try {
+      const response = await apiClient.request('/api/dashboard/recent-backups')
+      return response
+    } catch (error) {
+      console.error('Failed to fetch recent backups:', error)
+      return { success: false, data: [] }
+    }
+  },
+
+  async getNextTasks() {
+    try {
+      const response = await apiClient.request('/api/dashboard/next-tasks')
+      return response
+    } catch (error) {
+      console.error('Failed to fetch next tasks:', error)
+      return { success: false, data: [] }
     }
   },
 

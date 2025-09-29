@@ -11,25 +11,19 @@
           @click="openUploadModal"
           :disabled="uploading"
         >
-          <span v-if="uploading" class="loading loading-spinner loading-sm"></span>
           📤 Upload Backup
         </button>
       </div>
     </div>
 
-    <!-- Loading state -->
-    <div v-if="loading" class="flex justify-center items-center py-8">
-      <span class="loading loading-spinner loading-lg"></span>
-    </div>
-
     <!-- Error state -->
-    <div v-else-if="error" class="alert alert-error">
+    <div v-if="error" class="alert alert-error mb-6">
       <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
       <span>{{ error }}</span>
     </div>
 
     <!-- Backups table -->
-    <div v-else class="card bg-base-200 shadow-xl">
+    <div v-if="!loading" class="card bg-base-200 shadow-xl">
       <div class="card-body">
         <div class="overflow-x-auto">
           <table class="table">
@@ -127,7 +121,6 @@
             @click="confirmRestore"
             :disabled="restoring"
           >
-            <span v-if="restoring" class="loading loading-spinner loading-sm"></span>
             {{ restoring ? 'Restoring...' : 'Restore' }}
           </button>
           <button class="btn" @click="closeRestoreModal">Cancel</button>
@@ -203,7 +196,6 @@
             @click="confirmUpload"
             :disabled="uploading || !selectedFile || !uploadForm.databaseConfigId"
           >
-            <span v-if="uploading" class="loading loading-spinner loading-sm"></span>
             {{ uploading ? 'Uploading...' : 'Upload' }}
           </button>
           <button class="btn" @click="closeUploadModal">Cancel</button>
@@ -288,7 +280,6 @@
             @click="saveMetadata"
             :disabled="savingMetadata"
           >
-            <span v-if="savingMetadata" class="loading loading-spinner loading-sm"></span>
             {{ savingMetadata ? 'Saving...' : 'Save Changes' }}
           </button>
           <button class="btn" @click="closeMetadataModal">Cancel</button>
@@ -301,6 +292,9 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue'
 import { backupsApi, databaseConfigsApi } from '@/composables/api'
+import { useLoading } from '@/stores/loading.js'
+
+const { startLoading, stopLoading } = useLoading()
 
 // Reactive data
 const loading = ref(false)
@@ -361,6 +355,7 @@ const getBackupName = (backup) => {
 // Methods
 const loadBackups = async () => {
   try {
+    startLoading('backups')
     loading.value = true
     error.value = null
     
@@ -376,6 +371,7 @@ const loadBackups = async () => {
     console.error('Error loading backups:', err)
   } finally {
     loading.value = false
+    stopLoading('backups')
   }
 }
 
