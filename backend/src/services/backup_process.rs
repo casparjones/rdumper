@@ -1,0 +1,232 @@
+use anyhow::{anyhow, Result};
+use std::path::{Path, PathBuf};
+use std::fs;
+use tokio::fs as async_fs;
+use chrono::Utc;
+use sha2::{Sha256, Digest};
+use serde::{Serialize, Deserialize};
+
+use crate::models::{DatabaseConfig, Task, BackupMetadata, DatabaseConfigInfo, TaskInfo};
+
+#[derive(Debug)]
+pub struct BackupProcess {
+    pub id: String,
+    pub root_dir: PathBuf,
+    pub tmp_dir: PathBuf,
+    pub meta_file: PathBuf,
+    pub database_config: DatabaseConfig,
+    pub task: Option<Task>,
+    pub backup_type: String,
+    pub compression_type: String,
+}
+
+impl BackupProcess {
+    /// Create a new backup process
+    pub fn new(
+        id: String,
+        root_dir: PathBuf,
+        database_config: DatabaseConfig,
+        task: Option<Task>,
+        backup_type: String,
+        compression_type: String,
+    ) -> Self {
+        let tmp_dir = root_dir.join("tmp");
+        let meta_file = root_dir.join("rdumper.backup.json");
+        
+        Self {
+            id,
+            root_dir,
+            tmp_dir,
+            meta_file,
+            database_config,
+            task,
+            backup_type,
+            compression_type,
+        }
+    }
+    
+    /// Initialize the backup process by creating directories and metadata
+    pub async fn initialize(&self) -> Result<()> {
+        // Create root directory
+        async_fs::create_dir_all(&self.root_dir).await?;
+        
+        // Create tmp directory
+        async_fs::create_dir_all(&self.tmp_dir).await?;
+        
+        // Create initial metadata
+        self.create_initial_metadata().await?;
+        
+        Ok(())
+    }
+    
+    /// Get the tmp directory path for mydumper output
+    pub fn tmp_dir(&self) -> &Path {
+        &self.tmp_dir
+    }
+    
+    /// Complete the backup process by creating archive and cleaning up
+    pub async fn complete(&mut self) -> Result<String> {
+        // Create backup archive
+        let archive_path = self.create_archive().await?;
+        
+        // Calculate SHA-256 hash
+        let sha256_hash = self.calculate_sha256_hash(&archive_path).await?;
+        
+        // Get file size
+        let metadata = async_fs::metadata(&archive_path).await?;
+        let file_size = metadata.len() as i64;
+        
+        // Update metadata with final information
+        self.update_metadata(&archive_path, file_size, sha256_hash).await?;
+        
+        // Clean up tmp directory
+        self.cleanup_tmp().await?;
+        
+        // Return the archive path as string
+        Ok(archive_path.to_string_lossy().to_string())
+    }
+    
+    /// Create initial metadata file
+    async fn create_initial_metadata(&self) -> Result<()> {
+        let database_config_info = DatabaseConfigInfo {
+            id: self.database_config.id.clone(),
+            name: self.database_config.name.clone(),
+            host: self.database_config.host.clone(),
+            port: self.database_config.port as u16,
+            username: self.database_config.username.clone(),
+            database_name: self.database_config.database_name.clone(),
+        };
+        
+        let task_info = self.task.as_ref().map(|t| TaskInfo {
+            id: t.id.clone(),
+            name: t.name.clone(),
+            schedule: Some(t.cron_schedule.clone()),
+            use_non_transactional: t.use_non_transactional,
+        });
+        
+        let backup_metadata = BackupMetadata {
+            id: self.id.clone(),
+            database_name: self.database_config.database_name.clone(),
+            database_config_id: self.database_config.id.clone(),
+            task_id: self.task.as_ref().map(|t| t.id.clone()),
+            file_path: String::new(), // Will be set when archive is created
+            meta_path: self.meta_file.to_string_lossy().to_string(),
+            file_size: 0, // Will be set when archive is created
+            compression_type: self.compression_type.clone(),
+            created_at: Utc::now(),
+            backup_type: self.backup_type.clone(),
+            sha256_hash: None, // Will be set when archive is created
+            database_config: database_config_info,
+            task_info,
+        };
+        
+        let content = serde_json::to_string_pretty(&backup_metadata)?;
+        async_fs::write(&self.meta_file, content).await?;
+        
+        Ok(())
+    }
+    
+    /// Create backup archive from tmp directory
+    async fn create_archive(&self) -> Result<PathBuf> {
+        let timestamp = Utc::now().format("%Y%m%d_%H%M%S");
+        let archive_name = format!("{}-{}.{}", 
+            self.database_config.database_name, 
+            timestamp,
+            self.get_archive_extension()
+        );
+        let archive_path = self.root_dir.join(&archive_name);
+        
+        // Create tar archive
+        self.create_tar_archive(&archive_path).await?;
+        
+        Ok(archive_path)
+    }
+    
+    /// Get archive extension based on compression type
+    fn get_archive_extension(&self) -> &'static str {
+        match self.compression_type.as_str() {
+            "gzip" => "tar.gz",
+            "zstd" => "tar.zst",
+            "none" => "tar",
+            _ => "tar.gz", // Default to gzip
+        }
+    }
+    
+    /// Create tar archive with appropriate compression
+    async fn create_tar_archive(&self, output_path: &Path) -> Result<()> {
+        use tokio::process::Command;
+        
+        // Wait a moment to ensure all files are written
+        tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+        
+        let mut cmd = Command::new("tar");
+        
+        match self.compression_type.as_str() {
+            "gzip" => {
+                cmd.args(&["-czf", output_path.to_str().unwrap()]);
+            },
+            "zstd" => {
+                cmd.args(&["-c", "--zstd", "-f", output_path.to_str().unwrap()]);
+            },
+            "none" => {
+                cmd.args(&["-cf", output_path.to_str().unwrap()]);
+            },
+            _ => {
+                cmd.args(&["-czf", output_path.to_str().unwrap()]);
+            }
+        }
+        
+        cmd.args(&["-C", self.tmp_dir.to_str().unwrap(), "--warning=no-file-changed", "."]);
+        
+        let status = cmd.status().await?;
+        
+        if !status.success() {
+            return Err(anyhow!("Failed to create tar archive"));
+        }
+        
+        Ok(())
+    }
+    
+    /// Calculate SHA-256 hash of the archive
+    async fn calculate_sha256_hash(&self, file_path: &Path) -> Result<String> {
+        let mut file = async_fs::File::open(file_path).await?;
+        let mut hasher = Sha256::new();
+        let mut buffer = [0; 8192];
+        
+        use tokio::io::AsyncReadExt;
+        
+        loop {
+            let bytes_read = file.read(&mut buffer).await?;
+            if bytes_read == 0 {
+                break;
+            }
+            hasher.update(&buffer[..bytes_read]);
+        }
+        
+        Ok(format!("{:x}", hasher.finalize()))
+    }
+    
+    /// Update metadata with final information
+    async fn update_metadata(&self, archive_path: &Path, file_size: i64, sha256_hash: String) -> Result<()> {
+        let content = async_fs::read_to_string(&self.meta_file).await?;
+        let mut metadata: BackupMetadata = serde_json::from_str(&content)?;
+        
+        // Update with final information
+        metadata.file_path = archive_path.to_string_lossy().to_string();
+        metadata.file_size = file_size;
+        metadata.sha256_hash = Some(sha256_hash);
+        
+        let updated_content = serde_json::to_string_pretty(&metadata)?;
+        async_fs::write(&self.meta_file, updated_content).await?;
+        
+        Ok(())
+    }
+    
+    /// Clean up tmp directory
+    async fn cleanup_tmp(&self) -> Result<()> {
+        if self.tmp_dir.exists() {
+            async_fs::remove_dir_all(&self.tmp_dir).await?;
+        }
+        Ok(())
+    }
+}

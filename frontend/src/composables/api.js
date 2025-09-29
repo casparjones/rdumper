@@ -177,6 +177,10 @@ export const jobsApi = {
 
   active() {
     return apiClient.get('/api/jobs/active')
+  },
+
+  detailedProgress(id) {
+    return apiClient.get(`/api/jobs/${id}/detailed-progress`)
   }
 }
 
@@ -221,6 +225,10 @@ export const backupsApi = {
 
   cleanup(days = 30) {
     return apiClient.post('/api/backups/cleanup', { days })
+  },
+
+  updateMetadata(id, metadata) {
+    return apiClient.post(`/api/backups/${id}/metadata`, metadata)
   },
 
   // Upload backup file

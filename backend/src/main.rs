@@ -3,6 +3,9 @@ mod models;
 mod db;
 mod services;
 
+#[cfg(test)]
+mod tests;
+
 use anyhow::Result;
 use axum::Router;
 use clap::Parser;

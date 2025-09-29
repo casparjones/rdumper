@@ -267,45 +267,17 @@ async fn run_task_now(
             .await;
 
         match result {
-            Ok(backup_path) => {
-                // Create backup record
-                let backup_request = crate::models::CreateBackupRequest {
-                    database_config_id: db_config_clone.id.clone(),
-                    task_id: Some(task_clone.id.clone()),
-                    file_path: backup_path.clone(),
-                    file_size: std::fs::metadata(&backup_path)
-                        .map(|m| m.len() as i64)
-                        .unwrap_or(0),
-                    compression_type: task_clone.compression_type.clone(),
-                };
-
-                let backup = crate::models::Backup::new(backup_request);
-
-                // Insert backup record
-                if let Err(e) = sqlx::query(
-                    r#"
-                    INSERT INTO backups (id, database_config_id, task_id, file_path, file_size, compression_type, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                    "#
-                )
-                .bind(&backup.id)
-                .bind(&backup.database_config_id)
-                .bind(&backup.task_id)
-                .bind(&backup.file_path)
-                .bind(&backup.file_size)
-                .bind(&backup.compression_type)
-                .bind(&backup.created_at)
-                .execute(&pool_clone)
-                .await {
-                    tracing::error!("Failed to create backup record: {}", e);
-                }
+            Ok(backup_file_path) => {
+                // The backup is already created by the new BackupProcess system
+                // No need to create another backup process
+                tracing::info!("Backup created successfully: {}", backup_file_path);
 
                 // Update job as completed
                 let _ = sqlx::query("UPDATE jobs SET status = ?, completed_at = ?, progress = ?, backup_path = ? WHERE id = ?")
                     .bind("completed")
                     .bind(chrono::Utc::now())
                     .bind(100)
-                    .bind(&backup_path)
+                    .bind(&backup_file_path)
                     .bind(&job_id)
                     .execute(&pool_clone)
                     .await;

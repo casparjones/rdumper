@@ -11,7 +11,8 @@ use sqlx::SqlitePool;
 use std::path::Path as StdPath;
 use tracing::error;
 
-use crate::models::{Backup, CreateBackupRequest, RestoreRequest, Job, CreateJobRequest, JobType};
+use crate::models::{Backup, RestoreRequest, Job, CreateJobRequest, JobType};
+use crate::services::FilesystemBackupService;
 use super::{ApiError, ApiResult, success_response, paginated_response};
 
 #[derive(Deserialize)]
@@ -24,159 +25,81 @@ pub struct ListQuery {
 
 pub fn routes(pool: SqlitePool) -> Router {
     Router::new()
-        .route("/", get(list_backups).post(create_backup))
+        .route("/", get(list_backups))
         .route("/upload", post(upload_backup))
         .route("/:id", get(get_backup).delete(delete_backup))
         .route("/:id/restore", post(restore_backup))
         .route("/:id/download", get(download_backup))
+        .route("/:id/metadata", post(update_metadata))
         .route("/cleanup", post(cleanup_old_backups))
         .with_state(pool)
 }
 
 async fn list_backups(
-    State(pool): State<SqlitePool>,
+    State(_pool): State<SqlitePool>,
     Query(query): Query<ListQuery>,
 ) -> ApiResult<impl axum::response::IntoResponse> {
     let page = query.page.unwrap_or(1);
     let limit = query.limit.unwrap_or(10);
-    let offset = (page - 1) * limit;
+    let _offset = (page - 1) * limit;
 
-    let mut sql = "SELECT * FROM backups".to_string();
-    let mut count_sql = "SELECT COUNT(*) as count FROM backups".to_string();
-    let mut conditions = Vec::new();
-    
-    if query.database_config_id.is_some() {
-        conditions.push("database_config_id = ?");
-    }
-    
-    if query.task_id.is_some() {
-        conditions.push("task_id = ?");
-    }
-    
-    if !conditions.is_empty() {
-        let where_clause = format!(" WHERE {}", conditions.join(" AND "));
-        sql.push_str(&where_clause);
-        count_sql.push_str(&where_clause);
-    }
-    
-    sql.push_str(&format!(" ORDER BY created_at DESC LIMIT {} OFFSET {}", limit, offset));
+    // Initialize filesystem backup service
+    let backup_service = FilesystemBackupService::new(
+        std::env::var("BACKUP_BASE_DIR").unwrap_or_else(|_| "data/backups".to_string())
+    );
 
-    let mut query_builder = sqlx::query_as(&sql);
-    let mut count_query_builder = sqlx::query_as(&count_sql);
-    
+    // Scan filesystem for backups
+    let mut all_backups = backup_service.scan_backups().await
+        .map_err(|e| ApiError::InternalError(format!("Failed to scan backups: {}", e)))?;
+
+    // Apply filters
     if let Some(ref db_config_id) = query.database_config_id {
-        query_builder = query_builder.bind(db_config_id);
-        count_query_builder = count_query_builder.bind(db_config_id);
+        all_backups.retain(|b| b.database_config_id == *db_config_id);
     }
     
     if let Some(ref task_id) = query.task_id {
-        query_builder = query_builder.bind(task_id);
-        count_query_builder = count_query_builder.bind(task_id);
+        all_backups.retain(|b| b.task_id.as_ref() == Some(task_id));
     }
 
-    let mut backups: Vec<Backup> = query_builder.fetch_all(&pool).await?;
+    let total = all_backups.len();
     
-    // Check if backup files still exist and update file sizes
-    for backup in &mut backups {
-        if let Ok(metadata) = std::fs::metadata(&backup.file_path) {
-            if backup.file_size != metadata.len() as i64 {
-                // Update file size in database if it has changed
-                let _ = sqlx::query(
-                    "UPDATE backups SET file_size = ? WHERE id = ?"
-                )
-                .bind(metadata.len() as i64)
-                .bind(&backup.id)
-                .execute(&pool)
-                .await;
-                
-                backup.file_size = metadata.len() as i64;
-            }
-        }
-    }
-    
-    let total: (i64,) = count_query_builder.fetch_one(&pool).await?;
+    // Apply pagination
+    let start = ((page - 1) * limit) as usize;
+    let end = std::cmp::min(start + limit as usize, total);
+    let backups = if start < total {
+        all_backups[start..end].to_vec()
+    } else {
+        Vec::new()
+    };
 
-    Ok(paginated_response(backups, page, limit, total.0 as u64))
+    Ok(paginated_response(backups, page, limit, total as u64))
 }
 
 async fn get_backup(
-    State(pool): State<SqlitePool>,
+    State(_pool): State<SqlitePool>,
     Path(id): Path<String>,
 ) -> ApiResult<impl axum::response::IntoResponse> {
-    let backup: Option<Backup> = sqlx::query_as(
-        "SELECT * FROM backups WHERE id = ?"
-    )
-    .bind(&id)
-    .fetch_optional(&pool)
-    .await?;
+    // Initialize filesystem backup service
+    let backup_service = FilesystemBackupService::new(
+        std::env::var("BACKUP_BASE_DIR").unwrap_or_else(|_| "data/backups".to_string())
+    );
 
-    match backup {
-        Some(mut backup) => {
-            // Check if file still exists and update size
-            if let Ok(metadata) = std::fs::metadata(&backup.file_path) {
-                backup.file_size = metadata.len() as i64;
-            }
-            Ok(success_response(backup))
-        },
-        None => Err(ApiError::NotFound("Backup not found".to_string())),
-    }
-}
+    // Scan filesystem for backups
+    let backups = backup_service.scan_backups().await
+        .map_err(|e| ApiError::InternalError(format!("Failed to scan backups: {}", e)))?;
 
-async fn create_backup(
-    State(pool): State<SqlitePool>,
-    Json(req): Json<CreateBackupRequest>,
-) -> ApiResult<impl axum::response::IntoResponse> {
-    // Validate that database config exists
-    let db_config_exists: Option<(String,)> = sqlx::query_as(
-        "SELECT id FROM database_configs WHERE id = ?"
-    )
-    .bind(&req.database_config_id)
-    .fetch_optional(&pool)
-    .await?;
+    // Find backup by ID
+    let backup = backups.into_iter()
+        .find(|b| b.id == id)
+        .ok_or_else(|| ApiError::NotFound("Backup not found".to_string()))?;
 
-    if db_config_exists.is_none() {
-        return Err(ApiError::BadRequest("Database configuration not found".to_string()));
-    }
-
-    // Validate that task exists if provided
-    if let Some(ref task_id) = req.task_id {
-        let task_exists: Option<(String,)> = sqlx::query_as(
-            "SELECT id FROM tasks WHERE id = ?"
-        )
-        .bind(task_id)
-        .fetch_optional(&pool)
-        .await?;
-
-        if task_exists.is_none() {
-            return Err(ApiError::BadRequest("Task not found".to_string()));
-        }
-    }
-
-    // Validate that backup file exists
-    if !StdPath::new(&req.file_path).exists() {
-        return Err(ApiError::BadRequest("Backup file does not exist".to_string()));
-    }
-
-    let backup = Backup::new(req);
-
-    sqlx::query(
-        r#"
-        INSERT INTO backups (id, database_config_id, task_id, file_path, file_size, compression_type, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        "#
-    )
-    .bind(&backup.id)
-    .bind(&backup.database_config_id)
-    .bind(&backup.task_id)
-    .bind(&backup.file_path)
-    .bind(&backup.file_size)
-    .bind(&backup.compression_type)
-    .bind(&backup.created_at)
-    .execute(&pool)
-    .await?;
+    // Load full metadata
+    let _metadata = backup.load_metadata().await
+        .map_err(|e| ApiError::InternalError(format!("Failed to load backup metadata: {}", e)))?;
 
     Ok(success_response(backup))
 }
+
 
 async fn upload_backup(
     State(pool): State<SqlitePool>,
@@ -250,13 +173,8 @@ async fn upload_backup(
         return Err(ApiError::BadRequest("Database configuration not found".to_string()));
     }
 
-    // Create backup directory if it doesn't exist
-    let backup_dir = std::env::var("BACKUP_BASE_DIR").unwrap_or_else(|_| "backend/data/backups".to_string());
-    std::fs::create_dir_all(&backup_dir).map_err(|e| {
-        ApiError::InternalError(format!("Failed to create backup directory: {}", e))
-    })?;
-
-    // Generate unique filename with timestamp
+    // Create temporary file first
+    let temp_dir = std::env::var("TEMP_DIR").unwrap_or_else(|_| "/tmp".to_string());
     let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
     let file_extension = if filename.ends_with(".tar.gz") {
         "tar.gz"
@@ -271,89 +189,114 @@ async fn upload_backup(
         .map(|c| if c.is_alphanumeric() || c == '.' || c == '-' || c == '_' { c } else { '_' })
         .collect::<String>();
     
-    let backup_filename = format!("uploaded_{}_{}.{}", 
+    let temp_filename = format!("uploaded_{}_{}.{}", 
         safe_filename.trim_end_matches(&format!(".{}", file_extension)),
         timestamp,
         file_extension
     );
     
-    let backup_path = format!("{}/{}", backup_dir, backup_filename);
+    let temp_path = format!("{}/{}", temp_dir, temp_filename);
 
-    // Write file to disk
-    tokio::fs::write(&backup_path, &file_data).await.map_err(|e| {
+    // Write file to temporary location
+    tokio::fs::write(&temp_path, &file_data).await.map_err(|e| {
         ApiError::InternalError(format!("Failed to write backup file: {}", e))
     })?;
 
-    // Get file size
-    let file_size = file_data.len() as i64;
+    // Get database config for metadata
+    let db_config: crate::models::DatabaseConfig = sqlx::query_as(
+        "SELECT * FROM database_configs WHERE id = ?"
+    )
+    .bind(&database_config_id)
+    .fetch_one(&pool)
+    .await?;
 
-    // Create backup record
-    let backup_request = CreateBackupRequest {
-        database_config_id,
-        task_id: None, // Uploaded backups are not associated with tasks
-        file_path: backup_path,
-        file_size,
-        compression_type,
+    // Initialize filesystem backup service
+    let backup_service = FilesystemBackupService::new(
+        std::env::var("BACKUP_BASE_DIR").unwrap_or_else(|_| "data/backups".to_string())
+    );
+
+    // For uploaded files, we need to extract them first if they are archives
+    let extract_dir = if filename.ends_with(".tar.gz") || filename.ends_with(".tar.zst") {
+        // Extract the uploaded archive to a temporary directory
+        let extract_path = format!("{}/extracted_{}", temp_dir, timestamp);
+        std::fs::create_dir_all(&extract_path).map_err(|e| ApiError::InternalError(format!("Failed to create extract directory: {}", e)))?;
+        
+        let mut cmd = tokio::process::Command::new("tar");
+        if filename.ends_with(".tar.gz") {
+            cmd.args(&["-xzf", &temp_path, "-C", &extract_path]);
+        } else {
+            cmd.args(&["--zstd", "-xf", &temp_path, "-C", &extract_path]);
+        }
+        
+        let status = cmd.status().await.map_err(|e| ApiError::InternalError(format!("Failed to execute tar command: {}", e)))?;
+        if !status.success() {
+            return Err(ApiError::InternalError("Failed to extract uploaded archive".to_string()));
+        }
+        
+        extract_path
+    } else {
+        // For non-archive files, create a directory and copy the file
+        let file_dir = format!("{}/file_{}", temp_dir, timestamp);
+        std::fs::create_dir_all(&file_dir).map_err(|e| ApiError::InternalError(format!("Failed to create file directory: {}", e)))?;
+        std::fs::copy(&temp_path, format!("{}/{}", file_dir, filename)).map_err(|e| ApiError::InternalError(format!("Failed to copy file: {}", e)))?;
+        file_dir
     };
 
-    let backup = Backup::new(backup_request);
+    // Create backup using new BackupProcess system
+    let backup_id = uuid::Uuid::new_v4().to_string();
+    let mut backup_process = backup_service.create_backup_process(&backup_id, &db_config, None).await
+        .map_err(|e| ApiError::InternalError(format!("Failed to create backup process: {}", e)))?;
+    
+    // Copy files from extract_dir to tmp directory
+    let tmp_dir = backup_process.tmp_dir().to_path_buf();
+    std::fs::create_dir_all(&tmp_dir).map_err(|e| ApiError::InternalError(format!("Failed to create tmp directory: {}", e)))?;
+    
+    // Copy files from extract_dir to tmp_dir
+    let mut entries = std::fs::read_dir(&extract_dir).map_err(|e| ApiError::InternalError(format!("Failed to read extract directory: {}", e)))?;
+    while let Some(entry) = entries.next() {
+        let entry = entry.map_err(|e| ApiError::InternalError(format!("Failed to read directory entry: {}", e)))?;
+        let path = entry.path();
+        if path.is_file() {
+            let filename = path.file_name().unwrap();
+            std::fs::copy(&path, tmp_dir.join(filename)).map_err(|e| ApiError::InternalError(format!("Failed to copy file: {}", e)))?;
+        }
+    }
+    
+    // Complete the backup process
+    backup_process.complete().await.map_err(|e| ApiError::InternalError(format!("Failed to complete backup: {}", e)))?;
 
-    // Insert backup into database
-    sqlx::query(
-        r#"
-        INSERT INTO backups (id, database_config_id, task_id, file_path, file_size, compression_type, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        "#
-    )
-    .bind(&backup.id)
-    .bind(&backup.database_config_id)
-    .bind(&backup.task_id)
-    .bind(&backup.file_path)
-    .bind(&backup.file_size)
-    .bind(&backup.compression_type)
-    .bind(&backup.created_at)
-    .execute(&pool)
-    .await?;
+    // Clean up temporary files and directories
+    let _ = tokio::fs::remove_file(&temp_path).await;
+    let _ = tokio::fs::remove_dir_all(&extract_dir).await;
 
     Ok(success_response(serde_json::json!({
         "message": "Backup uploaded successfully",
-        "backup": backup,
+        "backup_id": backup_id,
         "original_filename": filename
     })))
 }
 
 async fn delete_backup(
-    State(pool): State<SqlitePool>,
+    State(_pool): State<SqlitePool>,
     Path(id): Path<String>,
 ) -> ApiResult<impl axum::response::IntoResponse> {
-    let backup: Option<Backup> = sqlx::query_as(
-        "SELECT * FROM backups WHERE id = ?"
-    )
-    .bind(&id)
-    .fetch_optional(&pool)
-    .await?;
+    // Initialize filesystem backup service
+    let backup_service = FilesystemBackupService::new(
+        std::env::var("BACKUP_BASE_DIR").unwrap_or_else(|_| "data/backups".to_string())
+    );
 
-    let backup = backup.ok_or_else(|| ApiError::NotFound("Backup not found".to_string()))?;
+    // Scan filesystem for backups
+    let backups = backup_service.scan_backups().await
+        .map_err(|e| ApiError::InternalError(format!("Failed to scan backups: {}", e)))?;
 
-    // Delete the actual backup file and related directories
-    if StdPath::new(&backup.file_path).exists() {
-        if let Err(e) = std::fs::remove_file(&backup.file_path) {
-            tracing::warn!("Failed to delete backup file {}: {}", backup.file_path, e);
-        }
-    }
+    // Find backup by ID
+    let backup = backups.into_iter()
+        .find(|b| b.id == id)
+        .ok_or_else(|| ApiError::NotFound("Backup not found".to_string()))?;
 
-    // Note: Log files are deleted when the associated job is deleted
-    // This ensures proper cleanup and avoids orphaned log files
-
-    // Delete from database
-    let result = sqlx::query("DELETE FROM backups WHERE id = ?")
-        .bind(&id)
-        .execute(&pool)
-        .await?;
-
-    if result.rows_affected() == 0 {
-        return Err(ApiError::NotFound("Backup not found".to_string()));
-    }
+    // Delete backup from filesystem
+    backup_service.delete_backup(&backup).await
+        .map_err(|e| ApiError::InternalError(format!("Failed to delete backup: {}", e)))?;
 
     Ok(success_response(serde_json::json!({"message": "Backup deleted successfully"})))
 }
@@ -363,20 +306,28 @@ async fn restore_backup(
     Path(id): Path<String>,
     Json(req): Json<RestoreRequest>,
 ) -> ApiResult<impl axum::response::IntoResponse> {
-    // Validate backup exists
-    let backup: Option<Backup> = sqlx::query_as(
-        "SELECT * FROM backups WHERE id = ?"
-    )
-    .bind(&id)
-    .fetch_optional(&pool)
-    .await?;
+    // Initialize filesystem backup service
+    let backup_service = FilesystemBackupService::new(
+        std::env::var("BACKUP_BASE_DIR").unwrap_or_else(|_| "data/backups".to_string())
+    );
 
-    let backup = backup.ok_or_else(|| ApiError::NotFound("Backup not found".to_string()))?;
+    // Scan filesystem for backups
+    let backups = backup_service.scan_backups().await
+        .map_err(|e| ApiError::InternalError(format!("Failed to scan backups: {}", e)))?;
+
+    // Find backup by ID
+    let backup = backups.into_iter()
+        .find(|b| b.id == id)
+        .ok_or_else(|| ApiError::NotFound("Backup not found".to_string()))?;
 
     // Validate backup file exists
     if !StdPath::new(&backup.file_path).exists() {
         return Err(ApiError::BadRequest("Backup file no longer exists".to_string()));
     }
+
+    // Load backup metadata to get database config info
+    let metadata = backup.load_metadata().await
+        .map_err(|e| ApiError::InternalError(format!("Failed to load backup metadata: {}", e)))?;
 
     // Validate target database config if specified
     let target_config_id = req.target_database_config_id.unwrap_or(backup.database_config_id.clone());
@@ -423,7 +374,7 @@ async fn restore_backup(
     // Start the actual restore process using myloader
     let pool_clone = pool.clone();
     let mydumper_service = crate::services::MydumperService::new(
-        std::env::var("BACKUP_BASE_DIR").unwrap_or_else(|_| "backend/data/backups".to_string()),
+        std::env::var("BACKUP_BASE_DIR").unwrap_or_else(|_| "data/backups".to_string()),
         std::env::var("LOG_BASE_DIR").unwrap_or_else(|_| "backend/data/logs".to_string()),
     );
 
@@ -503,18 +454,22 @@ async fn restore_backup(
 }
 
 async fn download_backup(
-    State(pool): State<SqlitePool>,
+    State(_pool): State<SqlitePool>,
     Path(id): Path<String>,
 ) -> Result<Response<Body>, ApiError> {
-    let backup: Option<Backup> = sqlx::query_as(
-        "SELECT * FROM backups WHERE id = ?"
-    )
-    .bind(&id)
-    .fetch_optional(&pool)
-    .await
-    .map_err(|e| ApiError::InternalError(format!("Database error: {}", e)))?;
+    // Initialize filesystem backup service
+    let backup_service = FilesystemBackupService::new(
+        std::env::var("BACKUP_BASE_DIR").unwrap_or_else(|_| "data/backups".to_string())
+    );
 
-    let backup = backup.ok_or_else(|| ApiError::NotFound("Backup not found".to_string()))?;
+    // Scan filesystem for backups
+    let backups = backup_service.scan_backups().await
+        .map_err(|e| ApiError::InternalError(format!("Failed to scan backups: {}", e)))?;
+
+    // Find backup by ID
+    let backup = backups.into_iter()
+        .find(|b| b.id == id)
+        .ok_or_else(|| ApiError::NotFound("Backup not found".to_string()))?;
 
     if !StdPath::new(&backup.file_path).exists() {
         return Err(ApiError::NotFound("Backup file not found on disk".to_string()));
@@ -543,7 +498,7 @@ async fn download_backup(
 }
 
 async fn cleanup_old_backups(
-    State(pool): State<SqlitePool>,
+    State(_pool): State<SqlitePool>,
     Query(query): Query<serde_json::Value>,
 ) -> ApiResult<impl axum::response::IntoResponse> {
     let days = query.get("days")
@@ -552,37 +507,28 @@ async fn cleanup_old_backups(
 
     let cutoff_date = chrono::Utc::now() - chrono::Duration::days(days);
 
-    // Get old backups to delete
-    let old_backups: Vec<Backup> = sqlx::query_as(
-        "SELECT * FROM backups WHERE created_at < ?"
-    )
-    .bind(&cutoff_date)
-    .fetch_all(&pool)
-    .await?;
+    // Initialize filesystem backup service
+    let backup_service = FilesystemBackupService::new(
+        std::env::var("BACKUP_BASE_DIR").unwrap_or_else(|_| "data/backups".to_string())
+    );
+
+    // Scan filesystem for backups
+    let all_backups = backup_service.scan_backups().await
+        .map_err(|e| ApiError::InternalError(format!("Failed to scan backups: {}", e)))?;
+
+    // Filter old backups
+    let old_backups: Vec<Backup> = all_backups.into_iter()
+        .filter(|backup| backup.created_at < cutoff_date)
+        .collect();
 
     let mut deleted_count = 0;
     let mut failed_deletions = Vec::new();
 
     for backup in old_backups {
-        // Delete the actual file
-        if StdPath::new(&backup.file_path).exists() {
-            if let Err(e) = std::fs::remove_file(&backup.file_path) {
-                tracing::warn!("Failed to delete backup file {}: {}", backup.file_path, e);
-                failed_deletions.push(backup.id.clone());
-                continue;
-            }
-        }
-
-        // Delete from database
-        let result = sqlx::query("DELETE FROM backups WHERE id = ?")
-            .bind(&backup.id)
-            .execute(&pool)
-            .await;
-
-        match result {
+        match backup_service.delete_backup(&backup).await {
             Ok(_) => deleted_count += 1,
             Err(e) => {
-                tracing::error!("Failed to delete backup {} from database: {}", backup.id, e);
+                tracing::error!("Failed to delete backup {}: {}", backup.id, e);
                 failed_deletions.push(backup.id);
             }
         }
@@ -593,5 +539,61 @@ async fn cleanup_old_backups(
         "deleted_count": deleted_count,
         "failed_deletions": failed_deletions,
         "cutoff_date": cutoff_date.to_rfc3339()
+    })))
+}
+
+#[derive(Deserialize)]
+pub struct UpdateMetadataRequest {
+    pub database_name: Option<String>,
+    pub database_config_id: Option<String>,
+    pub backup_type: Option<String>,
+    pub compression_type: Option<String>,
+}
+
+async fn update_metadata(
+    State(pool): State<SqlitePool>,
+    Path(id): Path<String>,
+    Json(request): Json<UpdateMetadataRequest>,
+) -> ApiResult<impl axum::response::IntoResponse> {
+    // Initialize filesystem backup service
+    let backup_service = FilesystemBackupService::new(
+        std::env::var("BACKUP_BASE_DIR").unwrap_or_else(|_| "data/backups".to_string())
+    );
+
+    // Find the backup
+    let backups = backup_service.scan_backups().await
+        .map_err(|e| ApiError::InternalError(format!("Failed to scan backups: {}", e)))?;
+    
+    let backup = backups.iter()
+        .find(|b| b.id == id)
+        .ok_or_else(|| ApiError::NotFound("Backup not found".to_string()))?;
+
+    // Load current metadata
+    let mut metadata = backup_service.load_backup_metadata(
+        std::path::Path::new(&backup.meta_path)
+    ).await
+    .map_err(|e| ApiError::InternalError(format!("Failed to load metadata: {}", e)))?;
+
+    // Update metadata fields
+    if let Some(database_name) = request.database_name {
+        metadata.database_name = database_name;
+    }
+    if let Some(database_config_id) = request.database_config_id {
+        metadata.database_config_id = database_config_id;
+    }
+    if let Some(backup_type) = request.backup_type {
+        metadata.backup_type = backup_type;
+    }
+    if let Some(compression_type) = request.compression_type {
+        metadata.compression_type = compression_type;
+    }
+
+    // Save updated metadata
+    backup_service.save_backup_metadata(&metadata).await
+        .map_err(|e| ApiError::InternalError(format!("Failed to save metadata: {}", e)))?;
+
+    Ok(success_response(serde_json::json!({
+        "message": "Metadata updated successfully",
+        "backup": metadata
     })))
 }

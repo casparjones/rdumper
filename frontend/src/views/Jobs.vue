@@ -116,6 +116,16 @@
                       <span v-else>🛑</span>
                     </button>
 
+                    <!-- Detailed Progress button for running jobs -->
+                    <button 
+                      v-if="job.status === 'running'"
+                      @click="viewDetailedProgress(job)" 
+                      class="btn btn-xs btn-ghost"
+                      title="View Detailed Progress"
+                    >
+                      📊 Details
+                    </button>
+
                     <!-- View Log button for completed/failed jobs -->
                     <button 
                       v-if="job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled'"
@@ -196,6 +206,150 @@
         <button type="button" @click="closeLogModal">close</button>
       </form>
     </dialog>
+
+    <!-- Detailed Progress Modal -->
+    <dialog ref="progressModal" class="modal">
+      <div class="modal-box w-11/12 max-w-6xl">
+        <h3 class="font-bold text-lg mb-4">
+          📊 Detailed Progress - {{ selectedJob?.id?.slice(0, 8) }}...
+        </h3>
+        
+        <!-- Overall Progress -->
+        <div v-if="detailedProgress" class="bg-base-300 p-4 rounded-lg mb-6">
+          <div class="flex items-center justify-between mb-4">
+            <h4 class="text-lg font-semibold">Overall Progress</h4>
+            <div class="text-2xl font-bold">{{ detailedProgress.overall_progress }}%</div>
+          </div>
+          
+          <div class="w-full bg-base-200 rounded-full h-4 mb-4">
+            <div 
+              class="bg-primary h-4 rounded-full transition-all duration-500 ease-out"
+              :style="`width: ${detailedProgress.overall_progress}%`"
+            ></div>
+          </div>
+          
+          <div class="grid grid-cols-2 md:grid-cols-5 gap-4 text-sm">
+            <div class="text-center">
+              <div class="text-2xl font-bold text-success">{{ detailedProgress.completed_tables }}</div>
+              <div class="text-xs text-base-content/70">Completed</div>
+            </div>
+            <div class="text-center">
+              <div class="text-2xl font-bold text-warning">{{ detailedProgress.in_progress_tables }}</div>
+              <div class="text-xs text-base-content/70">In Progress</div>
+            </div>
+            <div class="text-center">
+              <div class="text-2xl font-bold text-base-content/70">{{ detailedProgress.pending_tables }}</div>
+              <div class="text-xs text-base-content/70">Pending</div>
+            </div>
+            <div class="text-center">
+              <div class="text-2xl font-bold text-info">{{ detailedProgress.skipped_tables }}</div>
+              <div class="text-xs text-base-content/70">Skipped</div>
+            </div>
+            <div class="text-center">
+              <div class="text-2xl font-bold text-error">{{ detailedProgress.error_tables }}</div>
+              <div class="text-xs text-base-content/70">Errors</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tables List -->
+        <div v-if="detailedProgress" class="space-y-2 max-h-96 overflow-y-auto">
+          <h4 class="text-lg font-semibold mb-3">Table Progress</h4>
+          
+          <!-- In Progress Tables (Top) -->
+          <div v-if="inProgressTables.length > 0" class="space-y-1">
+            <div class="text-sm font-medium text-warning mb-2">🔄 In Progress</div>
+            <div 
+              v-for="table in inProgressTables" 
+              :key="table.name"
+              class="flex items-center justify-between p-3 bg-warning/10 rounded-lg border border-warning/20"
+            >
+              <div class="flex items-center gap-3">
+                <div class="w-4 h-4 rounded-full bg-warning animate-pulse"></div>
+                <span class="font-medium">{{ table.name }}</span>
+                <span v-if="table.progress_percent" class="text-sm text-base-content/70">
+                  {{ table.progress_percent }}%
+                </span>
+              </div>
+              <div v-if="table.progress_percent" class="w-24 bg-base-200 rounded-full h-2">
+                <div 
+                  class="bg-warning h-2 rounded-full transition-all duration-300"
+                  :style="`width: ${table.progress_percent}%`"
+                ></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Pending Tables (Middle) -->
+          <div v-if="pendingTables.length > 0" class="space-y-1">
+            <div class="text-sm font-medium text-base-content/70 mb-2">⏳ Pending</div>
+            <div 
+              v-for="table in pendingTables" 
+              :key="table.name"
+              class="flex items-center gap-3 p-3 bg-base-200 rounded-lg"
+            >
+              <div class="w-4 h-4 rounded-full bg-base-content/30"></div>
+              <span class="font-medium">{{ table.name }}</span>
+            </div>
+          </div>
+
+          <!-- Completed Tables (Bottom) -->
+          <div v-if="completedTables.length > 0" class="space-y-1">
+            <div class="text-sm font-medium text-success mb-2">✅ Completed</div>
+            <div 
+              v-for="table in completedTables" 
+              :key="table.name"
+              class="flex items-center gap-3 p-3 bg-success/10 rounded-lg border border-success/20"
+            >
+              <div class="w-4 h-4 rounded-full bg-success"></div>
+              <span class="font-medium">{{ table.name }}</span>
+              <span class="text-sm text-base-content/70">
+                {{ table.completed_at ? formatDateTime(table.completed_at) : '' }}
+              </span>
+            </div>
+          </div>
+
+          <!-- Skipped Tables -->
+          <div v-if="skippedTables.length > 0" class="space-y-1">
+            <div class="text-sm font-medium text-info mb-2">⏭️ Skipped (Non-InnoDB)</div>
+            <div 
+              v-for="table in skippedTables" 
+              :key="table.name"
+              class="flex items-center gap-3 p-3 bg-info/10 rounded-lg border border-info/20"
+            >
+              <div class="w-4 h-4 rounded-full bg-info"></div>
+              <span class="font-medium">{{ table.name }}</span>
+              <span class="text-sm text-base-content/70">
+                {{ table.error_message || 'Non-InnoDB table' }}
+              </span>
+            </div>
+          </div>
+
+          <!-- Error Tables -->
+          <div v-if="errorTables.length > 0" class="space-y-1">
+            <div class="text-sm font-medium text-error mb-2">❌ Errors</div>
+            <div 
+              v-for="table in errorTables" 
+              :key="table.name"
+              class="flex items-center gap-3 p-3 bg-error/10 rounded-lg border border-error/20"
+            >
+              <div class="w-4 h-4 rounded-full bg-error"></div>
+              <span class="font-medium">{{ table.name }}</span>
+              <span class="text-sm text-base-content/70">
+                {{ table.error_message || 'Unknown error' }}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div class="modal-action">
+          <button @click="closeProgressModal" class="btn">❌ Close</button>
+        </div>
+      </div>
+      <form method="dialog" class="modal-backdrop">
+        <button type="button" @click="closeProgressModal">close</button>
+      </form>
+    </dialog>
   </div>
 </template>
 
@@ -208,10 +362,13 @@ const jobs = ref([])
 const tasks = ref([])
 const databaseConfigs = ref([])
 const logModal = ref(null)
+const progressModal = ref(null)
 const selectedJob = ref(null)
 const jobLogs = ref('')
+const detailedProgress = ref(null)
 const loading = ref(true)
 const loadingLogs = ref(false)
+const loadingProgress = ref(false)
 const error = ref(null)
 const cancellingJob = ref(null)
 const statusFilter = ref('')
@@ -222,6 +379,32 @@ let refreshInterval = null
 // Computed values
 const activeJobs = computed(() => {
   return jobs.value.filter(job => job.status === 'running' || job.status === 'pending')
+})
+
+// Detailed progress computed properties
+const inProgressTables = computed(() => {
+  if (!detailedProgress.value) return []
+  return detailedProgress.value.tables.filter(table => table.status === 'InProgress')
+})
+
+const pendingTables = computed(() => {
+  if (!detailedProgress.value) return []
+  return detailedProgress.value.tables.filter(table => table.status === 'Pending')
+})
+
+const completedTables = computed(() => {
+  if (!detailedProgress.value) return []
+  return detailedProgress.value.tables.filter(table => table.status === 'Completed')
+})
+
+const skippedTables = computed(() => {
+  if (!detailedProgress.value) return []
+  return detailedProgress.value.tables.filter(table => table.status === 'Skipped')
+})
+
+const errorTables = computed(() => {
+  if (!detailedProgress.value) return []
+  return detailedProgress.value.tables.filter(table => table.status === 'Error')
 })
 
 // Load data functions
@@ -496,6 +679,65 @@ const showToast = (success, message) => {
   }, 5000)
 }
 
+// Detailed Progress Modal functions
+const viewDetailedProgress = async (job) => {
+  selectedJob.value = job
+  loadingProgress.value = true
+  
+  try {
+    const response = await jobsApi.detailedProgress(job.id)
+    detailedProgress.value = response.data
+    
+    // Open modal
+    if (progressModal.value) {
+      progressModal.value.showModal()
+    }
+    
+    // Start auto-refresh for detailed progress
+    startProgressRefresh()
+  } catch (err) {
+    console.error('Failed to load detailed progress:', err)
+    showToast(false, 'Failed to load detailed progress')
+  } finally {
+    loadingProgress.value = false
+  }
+}
+
+const closeProgressModal = () => {
+  if (progressModal.value) {
+    progressModal.value.close()
+  }
+  detailedProgress.value = null
+  selectedJob.value = null
+  stopProgressRefresh()
+}
+
+let progressRefreshInterval = null
+
+const startProgressRefresh = () => {
+  if (progressRefreshInterval) {
+    clearInterval(progressRefreshInterval)
+  }
+  
+  progressRefreshInterval = setInterval(async () => {
+    if (selectedJob.value && detailedProgress.value) {
+      try {
+        const response = await jobsApi.detailedProgress(selectedJob.value.id)
+        detailedProgress.value = response.data
+      } catch (err) {
+        console.error('Failed to refresh detailed progress:', err)
+      }
+    }
+  }, 2000) // Refresh every 2 seconds
+}
+
+const stopProgressRefresh = () => {
+  if (progressRefreshInterval) {
+    clearInterval(progressRefreshInterval)
+    progressRefreshInterval = null
+  }
+}
+
 // Auto-refresh for active jobs
 const startAutoRefresh = () => {
   const refresh = () => {
@@ -524,5 +766,6 @@ onMounted(async () => {
 
 onUnmounted(() => {
   stopAutoRefresh()
+  stopProgressRefresh()
 })
 </script>

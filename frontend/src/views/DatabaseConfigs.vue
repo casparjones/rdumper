@@ -37,58 +37,98 @@
       <button @click="openAddModal" class="btn btn-primary">Add Your First Database</button>
     </div>
 
-    <!-- Database Cards -->
-    <div v-else class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-      <div v-for="config in configs" :key="config.id" class="card bg-base-200 shadow-xl">
-        <div class="card-body">
-          <div class="flex justify-between items-start">
-            <h2 class="card-title">{{ config.name }}</h2>
-            <div v-if="config.last_test_status" class="tooltip" :data-tip="`Last test: ${config.last_test_time || 'Unknown'}`">
-              <div :class="['badge badge-sm', config.last_test_status === 'success' ? 'badge-success' : 'badge-error']">
-                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" :d="config.last_test_status === 'success' ? 'M5 13l4 4L19 7' : 'M6 18L18 6M6 6l12 12'"></path>
-                </svg>
-              </div>
-            </div>
-          </div>
-          <div class="space-y-2 text-sm">
-            <div class="flex justify-between">
-              <span class="text-base-content/70">Host:</span>
-              <span>{{ config.host }}:{{ config.port }}</span>
-            </div>
-            <div class="flex justify-between">
-              <span class="text-base-content/70">Database:</span>
-              <span>{{ config.database_name }}</span>
-            </div>
-            <div class="flex justify-between">
-              <span class="text-base-content/70">User:</span>
-              <span>{{ config.username }}</span>
-            </div>
-          </div>
-          <div class="card-actions justify-end mt-4">
-            <button @click="testConnection(config.id)" class="btn btn-sm btn-info" :disabled="testingConnection === config.id">
-              <span v-if="testingConnection === config.id" class="loading loading-spinner loading-xs"></span>
-              <svg v-else class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
-              </svg>
-              Test
-            </button>
-            <button @click="duplicateConfig(config)" class="btn btn-sm btn-secondary" title="Duplicate Configuration">
-              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
-              </svg>
-            </button>
-            <button @click="editConfig(config)" class="btn btn-sm btn-ghost" title="Edit Configuration">
-              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path>
-              </svg>
-            </button>
-            <button @click="deleteConfig(config.id)" class="btn btn-sm btn-error" title="Delete Configuration">
-              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
-              </svg>
-            </button>
-          </div>
+    <!-- Database Table -->
+    <div v-else class="card bg-base-100 shadow-xl">
+      <div class="card-body p-0">
+        <div class="overflow-x-auto">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Host & Port</th>
+                <th>Database</th>
+                <th>Username</th>
+                <th>Connection Status</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="config in configs" :key="config.id">
+                <td>
+                  <div class="font-medium">{{ config.name }}</div>
+                  <div class="text-sm text-base-content/70">ID: {{ config.id }}</div>
+                </td>
+                <td>
+                  <div class="font-medium">{{ config.host }}</div>
+                  <div class="text-sm text-base-content/70">Port: {{ config.port }}</div>
+                </td>
+                <td>
+                  <div class="font-medium">{{ config.database_name }}</div>
+                </td>
+                <td>
+                  <div class="font-medium">{{ config.username }}</div>
+                </td>
+                <td>
+                  <div v-if="config.last_test_status" class="tooltip" :data-tip="`Last test: ${config.last_test_time || 'Unknown'}`">
+                    <div :class="['badge badge-sm', config.last_test_status === 'success' ? 'badge-success' : 'badge-error']">
+                      <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" :d="config.last_test_status === 'success' ? 'M5 13l4 4L19 7' : 'M6 18L18 6M6 6l12 12'"></path>
+                      </svg>
+                      {{ config.last_test_status === 'success' ? 'Connected' : 'Failed' }}
+                    </div>
+                  </div>
+                  <div v-else class="badge badge-ghost">
+                    Not tested
+                  </div>
+                </td>
+                <td>
+                  <div class="flex gap-2">
+                    <button 
+                      @click="testConnection(config.id)" 
+                      :disabled="testingConnection === config.id"
+                      class="btn btn-sm btn-outline"
+                      title="Test Connection"
+                    >
+                      <span v-if="testingConnection === config.id" class="loading loading-spinner loading-xs"></span>
+                      <svg v-else class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                      </svg>
+                    </button>
+                    
+                    <button 
+                      @click="editConfig(config)" 
+                      class="btn btn-sm btn-ghost btn-square"
+                      title="Edit Database"
+                    >
+                      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path>
+                      </svg>
+                    </button>
+                    
+                    <button 
+                      @click="duplicateConfig(config)" 
+                      class="btn btn-sm btn-ghost btn-square"
+                      title="Duplicate Database"
+                    >
+                      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
+                      </svg>
+                    </button>
+                    
+                    <button 
+                      @click="deleteConfig(config.id)" 
+                      class="btn btn-sm btn-ghost btn-square text-error"
+                      title="Delete Database"
+                    >
+                      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+                      </svg>
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </div>
     </div>

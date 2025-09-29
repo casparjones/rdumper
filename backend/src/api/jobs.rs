@@ -7,6 +7,7 @@ use serde::Deserialize;
 use sqlx::SqlitePool;
 
 use crate::models::{Job, CreateJobRequest, JobStatus};
+use crate::services::progress_tracker::ProgressTracker;
 use super::{ApiError, ApiResult, success_response, paginated_response};
 
 #[derive(Deserialize)]
@@ -25,6 +26,7 @@ pub fn routes(pool: SqlitePool) -> Router {
         .route("/:id/cancel", post(cancel_job))
         .route("/:id/logs", get(get_job_logs))
         .route("/:id/progress", get(get_job_progress))
+        .route("/:id/detailed-progress", get(get_detailed_progress))
         .route("/active", get(list_active_jobs))
         .with_state(pool)
 }
@@ -346,4 +348,35 @@ async fn list_active_jobs(
     .await?;
 
     Ok(success_response(jobs))
+}
+
+async fn get_detailed_progress(
+    State(pool): State<SqlitePool>,
+    Path(id): Path<String>,
+) -> ApiResult<impl axum::response::IntoResponse> {
+    // Get job information
+    let job: Job = sqlx::query_as(
+        "SELECT * FROM jobs WHERE id = ?"
+    )
+    .bind(&id)
+    .fetch_optional(&pool)
+    .await?
+    .ok_or_else(|| ApiError::NotFound("Job not found".to_string()))?;
+
+    // Get log directory from job
+    let log_output = job.log_output.as_ref()
+        .ok_or_else(|| ApiError::BadRequest("Job has no log output".to_string()))?;
+    
+    let log_dir = std::path::Path::new(log_output)
+        .parent()
+        .ok_or_else(|| ApiError::BadRequest("Invalid log path".to_string()))?
+        .to_string_lossy()
+        .to_string();
+
+    // Create progress tracker and load detailed progress
+    let progress_tracker = ProgressTracker::new(log_dir);
+    let detailed_progress = progress_tracker.load_detailed_progress(&id).await
+        .map_err(|e| ApiError::InternalError(format!("Failed to load detailed progress: {}", e)))?;
+
+    Ok(success_response(detailed_progress))
 }

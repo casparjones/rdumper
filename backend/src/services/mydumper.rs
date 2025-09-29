@@ -87,21 +87,27 @@ impl MydumperService {
             warn!("MyDumper will ignore these tables using --ignore-engines parameter");
         }
 
-        // Create directory structure: <database>-<datum>/temp and logs
-        let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
-        let base_folder = format!("{}-{}", database_config.database_name, timestamp);
-        
-        let backup_dir = format!("{}/{}/temp", self.backup_base_dir, base_folder);
-        let log_dir = format!("{}/{}", self.log_base_dir, base_folder);
+        // Create backup process using new system
+        let backup_service = crate::services::FilesystemBackupService::new(self.backup_base_dir.clone());
+        let mut backup_process = backup_service.create_backup_process(&job_id, database_config, Some(task)).await?;
 
-        // Create directories
-        std::fs::create_dir_all(&backup_dir)?;
+        // Create log directory for mydumper logs
+        let log_dir = format!("{}/{}", self.log_base_dir, job_id);
         std::fs::create_dir_all(&log_dir)?;
 
-        // Use total table count for progress tracking (MyDumper will handle filtering)
+        // Create rdumper.meta.json with table information
         let table_count = (innodb_tables.len() + excluded_tables.len()) as u32;
-        let count_file = format!("{}/count_tables.txt", log_dir);
-        std::fs::write(&count_file, table_count.to_string())?;
+        let meta_file = format!("{}/rdumper.meta.json", log_dir);
+        
+        let rdumper_meta = serde_json::json!({
+            "count": table_count,
+            "tables": innodb_tables.iter().map(|t| t.clone()).collect::<Vec<String>>(),
+            "excluded_tables": excluded_tables.iter().map(|t| t.clone()).collect::<Vec<String>>(),
+            "database_name": database_config.database_name,
+            "started_at": chrono::Utc::now().to_rfc3339()
+        });
+        
+        std::fs::write(&meta_file, serde_json::to_string_pretty(&rdumper_meta)?)?;
 
         info!("Database {} has {} total tables ({} InnoDB will be backed up)", 
               database_config.database_name, table_count, innodb_tables.len());
@@ -146,7 +152,7 @@ impl MydumperService {
             .arg("--user").arg(&database_config.username)
             .arg("--password").arg(&database_config.password)
             .arg("--database").arg(&database_config.database_name)
-            .arg("--outputdir").arg(&backup_dir)
+            .arg("--outputdir").arg(backup_process.tmp_dir())
             .arg("--verbose").arg("3")
             .arg("--threads").arg("4")
             .arg("--triggers")
@@ -288,15 +294,17 @@ impl MydumperService {
 
         info!("Backup completed successfully for database: {}", database_config.database_name);
 
+        // Complete the backup process (creates archive, calculates hash, updates metadata, cleans up tmp)
+        let backup_file_path = backup_process.complete().await?;
+
         // Update job to completed
         self.update_job_status(pool, &job_id, "completed", None, Some(&log_file_path)).await?;
         self.update_job_progress(pool, &job_id, 100).await?;
 
-        // Compress the backup and clean up temp directory
-        let final_backup_path = self.compress_and_cleanup_backup(&backup_dir, &base_folder, &compression).await?;
-        self.update_job_backup_path(pool, &job_id, &final_backup_path).await?;
+        // Update job with backup file path
+        self.update_job_backup_path(pool, &job_id, &backup_file_path).await?;
 
-        Ok(final_backup_path)
+        Ok(backup_file_path)
     }
 
     // Keep the original backup method for compatibility
@@ -596,38 +604,7 @@ impl MydumperService {
     //     Ok(total_size)
     // }
 
-    async fn create_compressed_archive(&self, source_dir: &str, compression: &CompressionType) -> Result<String> {
-        let archive_path = match compression {
-            CompressionType::Gzip => format!("{}.tar.gz", source_dir),
-            CompressionType::Zstd => format!("{}.tar.zst", source_dir),
-            CompressionType::None => return Ok(source_dir.to_string()),
-        };
 
-        let mut cmd = TokioCommand::new("tar");
-        
-        match compression {
-            CompressionType::Gzip => {
-                cmd.args(&["-czf", &archive_path, "-C", source_dir, "."]);
-            }
-            CompressionType::Zstd => {
-                cmd.args(&["--zstd", "-cf", &archive_path, "-C", source_dir, "."]);
-            }
-            CompressionType::None => unreachable!(),
-        }
-
-        let status = cmd.status().await?;
-        
-        if !status.success() {
-            return Err(anyhow!("Failed to create compressed archive"));
-        }
-
-        // Remove the original directory after successful compression
-        if let Err(e) = std::fs::remove_dir_all(source_dir) {
-            warn!("Failed to remove source directory after compression: {}", e);
-        }
-
-        Ok(archive_path)
-    }
 
     async fn extract_compressed_archive(&self, archive_path: &Path) -> Result<String> {
         let extract_dir = archive_path.with_extension("");
@@ -668,76 +645,32 @@ impl MydumperService {
     //         .unwrap_or(false)
     // }
 
-    async fn compress_and_cleanup_backup(
-        &self,
-        temp_backup_dir: &str,
-        base_folder: &str,
-        compression: &CompressionType,
-    ) -> Result<String> {
-        info!("Compressing backup and cleaning up temp directory");
 
-        // Create the final backup directory (without temp)
-        let final_backup_dir = format!("{}/{}", self.backup_base_dir, base_folder);
-        std::fs::create_dir_all(&final_backup_dir)?;
-
-        // Move all files from temp to final directory
-        if let Ok(entries) = std::fs::read_dir(temp_backup_dir) {
-            for entry in entries {
-                if let Ok(entry) = entry {
-                    let src_path = entry.path();
-                    let dst_path = std::path::Path::new(&final_backup_dir).join(entry.file_name());
-                    
-                    if let Err(e) = std::fs::rename(&src_path, &dst_path) {
-                        warn!("Failed to move file {:?} to {:?}: {}", src_path, dst_path, e);
-                    }
-                }
-            }
-        }
-
-        // Remove the temp directory
-        if let Err(e) = std::fs::remove_dir(temp_backup_dir) {
-            warn!("Failed to remove temp directory {}: {}", temp_backup_dir, e);
-        }
-
-        // Create compressed archive
-        let archive_path = self.create_compressed_archive(&final_backup_dir, compression).await?;
-
-        // Remove the uncompressed directory after successful compression
-        if let Err(e) = std::fs::remove_dir_all(&final_backup_dir) {
-            warn!("Failed to remove uncompressed directory after compression: {}", e);
-        }
-
-        info!("Backup compression and cleanup completed: {}", archive_path);
-        Ok(archive_path)
-    }
-
-    /// Parse mydumper progress from log lines
-    /// Looks for patterns like: `Thread X: \`database\`.\`table\` [ 25% ] | Tables: 5/24`
     fn parse_mydumper_progress(&self, line: &str, total_tables: u32) -> Option<i32> {
-        // Look for progress pattern: [ XX% ] | Tables: X/Y
+        // Variante 1: Prozentangabe aus [ XX% ]
         if let Some(percent_start) = line.find("[ ") {
             if let Some(percent_end) = line[percent_start + 2..].find("% ]") {
                 let percent_str = &line[percent_start + 2..percent_start + 2 + percent_end];
                 if let Ok(percent) = percent_str.trim().parse::<i32>() {
-                    // Cap at 100% to avoid overflows
                     return Some(percent.min(100));
                 }
             }
         }
-        
-        // Alternative: Look for "Tables: X/Y" pattern to calculate progress
+
+        // Variante 2: Tabellenfortschritt aus "Tables: X/Y"
         if let Some(tables_start) = line.find("Tables: ") {
             if let Some(tables_end) = line[tables_start + 8..].find("/") {
                 let current_tables_str = &line[tables_start + 8..tables_start + 8 + tables_end];
                 if let Ok(current_tables) = current_tables_str.parse::<u32>() {
                     if total_tables > 0 {
-                        let progress = ((total_tables - current_tables) as f64 / total_tables as f64 * 100.0) as i32;
+                        let progress = (current_tables as f64 / total_tables as f64 * 100.0) as i32;
                         return Some(progress.min(100));
                     }
                 }
             }
         }
-        
+
         None
     }
+
 }

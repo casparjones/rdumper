@@ -45,7 +45,7 @@
             </thead>
             <tbody>
               <tr v-for="backup in backups" :key="backup.id">
-                <td>{{ backup.filename || 'Unknown' }}</td>
+                <td>{{ getBackupName(backup) }}</td>
                 <td>{{ getDatabaseName(backup.database_config_id) }}</td>
                 <td>{{ formatFileSize(backup.file_size) }}</td>
                 <td>{{ formatDate(backup.created_at) }}</td>
@@ -68,7 +68,14 @@
                       :disabled="downloading"
                       title="Download Backup"
                     >
-                      📥
+                      ⬇️
+                    </button>
+                    <button 
+                      class="btn btn-sm btn-ghost btn-square"
+                      @click="editMetadata(backup)"
+                      title="Edit Metadata"
+                    >
+                      ✏️
                     </button>
                     <button 
                       class="btn btn-sm btn-ghost btn-square"
@@ -203,6 +210,91 @@
         </div>
       </div>
     </div>
+
+    <!-- Metadata Edit Modal -->
+    <dialog ref="metadataModal" class="modal">
+      <div class="modal-box w-11/12 max-w-2xl">
+        <h3 class="font-bold text-lg mb-4">
+          ✏️ Edit Backup Metadata
+        </h3>
+        
+        <div v-if="editingBackup" class="space-y-4">
+          <!-- Database Name -->
+          <div class="form-control">
+            <label class="label">
+              <span class="label-text">Database Name</span>
+            </label>
+            <input 
+              v-model="metadataForm.database_name"
+              type="text" 
+              class="input input-bordered"
+              placeholder="Enter database name"
+            />
+          </div>
+
+          <!-- Database Config -->
+          <div class="form-control">
+            <label class="label">
+              <span class="label-text">Database Configuration</span>
+            </label>
+            <select v-model="metadataForm.database_config_id" class="select select-bordered">
+              <option value="">Select database configuration</option>
+              <option v-for="config in databaseConfigs" :key="config.id" :value="config.id">
+                {{ config.name }} ({{ config.database_name }})
+              </option>
+            </select>
+          </div>
+
+          <!-- Backup Type -->
+          <div class="form-control">
+            <label class="label">
+              <span class="label-text">Backup Type</span>
+            </label>
+            <select v-model="metadataForm.backup_type" class="select select-bordered">
+              <option value="manual">Manual</option>
+              <option value="scheduled">Scheduled</option>
+              <option value="uploaded">Uploaded</option>
+              <option value="external">External</option>
+            </select>
+          </div>
+
+          <!-- Compression Type -->
+          <div class="form-control">
+            <label class="label">
+              <span class="label-text">Compression Type</span>
+            </label>
+            <select v-model="metadataForm.compression_type" class="select select-bordered">
+              <option value="gzip">Gzip</option>
+              <option value="zstd">Zstandard</option>
+              <option value="none">None</option>
+              <option value="unknown">Unknown</option>
+            </select>
+          </div>
+
+          <!-- File Info (Read-only) -->
+          <div class="bg-base-200 p-4 rounded-lg">
+            <h4 class="font-semibold mb-2">File Information</h4>
+            <div class="text-sm space-y-1">
+              <div><strong>File Path:</strong> {{ editingBackup.file_path }}</div>
+              <div><strong>File Size:</strong> {{ formatFileSize(editingBackup.file_size) }}</div>
+              <div><strong>Created:</strong> {{ formatDateTime(editingBackup.created_at) }}</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="modal-action">
+          <button 
+            class="btn btn-primary"
+            @click="saveMetadata"
+            :disabled="savingMetadata"
+          >
+            <span v-if="savingMetadata" class="loading loading-spinner loading-sm"></span>
+            {{ savingMetadata ? 'Saving...' : 'Save Changes' }}
+          </button>
+          <button class="btn" @click="closeMetadataModal">Cancel</button>
+        </div>
+      </div>
+    </dialog>
   </div>
 </template>
 
@@ -223,6 +315,9 @@ const deleting = ref(false)
 const uploading = ref(false)
 const selectedFile = ref(null)
 const fileInput = ref(null)
+const editingBackup = ref(null)
+const savingMetadata = ref(false)
+const metadataModal = ref(null)
 
 // Restore form
 const restoreForm = ref({
@@ -237,10 +332,30 @@ const uploadForm = ref({
   compressionType: 'gzip'
 })
 
+// Metadata form
+const metadataForm = ref({
+  database_name: '',
+  database_config_id: '',
+  backup_type: '',
+  compression_type: ''
+})
+
 // Computed
 const getDatabaseName = (configId) => {
   const config = databaseConfigs.value.find(c => c.id === configId)
   return config ? config.database_name : 'Unknown'
+}
+
+const getBackupName = (backup) => {
+  // Extract backup name from file path or use database name
+  if (backup.file_path) {
+    const pathParts = backup.file_path.split('/')
+    const folderName = pathParts[pathParts.length - 2] // Get folder name
+    if (folderName) {
+      return folderName
+    }
+  }
+  return backup.database_name || 'Unknown'
 }
 
 // Methods
@@ -457,6 +572,52 @@ const showToast = (success, message) => {
       toast.parentNode.removeChild(toast)
     }
   }, 5000)
+}
+
+// Metadata editing functions
+const editMetadata = (backup) => {
+  editingBackup.value = backup
+  metadataForm.value = {
+    database_name: backup.database_name || '',
+    database_config_id: backup.database_config_id || '',
+    backup_type: backup.backup_type || '',
+    compression_type: backup.compression_type || ''
+  }
+  
+  if (metadataModal.value) {
+    metadataModal.value.showModal()
+  }
+}
+
+const closeMetadataModal = () => {
+  if (metadataModal.value) {
+    metadataModal.value.close()
+  }
+  editingBackup.value = null
+  metadataForm.value = {
+    database_name: '',
+    database_config_id: '',
+    backup_type: '',
+    compression_type: ''
+  }
+}
+
+const saveMetadata = async () => {
+  if (!editingBackup.value) return
+  
+  savingMetadata.value = true
+  
+  try {
+    await backupsApi.updateMetadata(editingBackup.value.id, metadataForm.value)
+    showToast(true, 'Metadata updated successfully')
+    closeMetadataModal()
+    await loadBackups() // Reload backups to show updated data
+  } catch (err) {
+    showToast(false, 'Failed to update metadata: ' + err.message)
+    console.error('Error updating metadata:', err)
+  } finally {
+    savingMetadata.value = false
+  }
 }
 
 // Lifecycle
