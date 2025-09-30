@@ -4,6 +4,7 @@ pub mod jobs;
 pub mod backups;
 pub mod system;
 pub mod dashboard;
+pub mod worker;
 
 use axum::{
     http::StatusCode,
@@ -13,15 +14,18 @@ use axum::{
 };
 use serde_json::json;
 use sqlx::SqlitePool;
+use std::sync::Arc;
+use crate::services::TaskWorker;
 
-pub fn create_routes(pool: SqlitePool) -> Router {
+pub fn create_routes(pool: SqlitePool, worker: Arc<TaskWorker>) -> Router {
     Router::new()
         .nest("/api/database-configs", database_configs::routes(pool.clone()))
         .nest("/api/tasks", tasks::routes(pool.clone()))
         .nest("/api/jobs", jobs::routes(pool.clone()))
         .nest("/api/backups", backups::routes(pool.clone()))
-        .nest("/api/system", system::routes())
+        .nest("/api/system", system::routes(worker.clone()))
         .nest("/api/dashboard", dashboard::routes(pool.clone()))
+        .nest("/api/worker", worker::routes(worker))
         .route("/api/health", get(health_check))
 }
 

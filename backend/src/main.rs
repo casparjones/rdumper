@@ -16,10 +16,11 @@ use axum::{
 use clap::Parser;
 use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
-use tracing::{info, instrument};
+use tracing::{info, instrument, error};
 use tracing_subscriber;
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
 
 #[derive(Parser)]
 #[command(name = "rdumper-backend")]
@@ -83,8 +84,19 @@ async fn main() -> Result<()> {
     let pool = db::create_database_pool(&cli.database_url).await?;
     info!("Database connection established");
 
+    // Start background task worker
+    let worker_pool = Arc::new(pool.clone());
+    let task_worker = Arc::new(services::TaskWorker::new(worker_pool));
+    let worker_for_api = task_worker.clone();
+    
+    tokio::spawn(async move {
+        if let Err(e) = task_worker.start().await {
+            error!("Task worker failed: {}", e);
+        }
+    });
+
     // Create API routes
-    let api_routes = api::create_routes(pool.clone());
+    let api_routes = api::create_routes(pool.clone(), worker_for_api);
 
     // SPA fallback handler - serves index.html for any non-API route
     let static_dir = cli.static_dir.clone();

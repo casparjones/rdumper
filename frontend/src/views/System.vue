@@ -111,6 +111,58 @@
       </div>
     </div>
 
+    <!-- Worker Status -->
+    <div v-if="!loading" class="card bg-base-200 shadow-xl mt-6">
+      <div class="card-body">
+        <div class="flex justify-between items-center mb-4">
+          <h2 class="card-title">Background Worker</h2>
+          <button 
+            @click="refreshWorkerStatus" 
+            class="btn btn-sm btn-outline"
+            :disabled="workerLoading"
+          >
+            <svg v-if="workerLoading" class="w-4 h-4 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+            </svg>
+            <svg v-else class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+            </svg>
+            Refresh
+          </button>
+        </div>
+        
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div class="stat">
+            <div class="stat-title">Status</div>
+            <div class="stat-value">
+              <div :class="`badge badge-${workerStatus.status_color === 'green' ? 'success' : workerStatus.status_color === 'red' ? 'error' : 'neutral'}`">
+                {{ workerStatus.status_text }}
+              </div>
+            </div>
+            <div class="stat-desc">{{ workerStatus.is_running ? 'Worker is active' : 'Worker is inactive' }}</div>
+          </div>
+          
+          <div class="stat">
+            <div class="stat-title">Last Tick</div>
+            <div class="stat-value text-sm">{{ lastTickFormatted }}</div>
+            <div class="stat-desc">{{ lastTickRelative }}</div>
+          </div>
+          
+          <div class="stat">
+            <div class="stat-title">Total Ticks</div>
+            <div class="stat-value">{{ workerStatus.total_ticks }}</div>
+            <div class="stat-desc">Since startup</div>
+          </div>
+          
+          <div class="stat">
+            <div class="stat-title">Tasks Executed</div>
+            <div class="stat-value">{{ workerStatus.tasks_executed }}</div>
+            <div class="stat-desc">Automatically triggered</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Health Checks -->
     <div v-if="!loading" class="card bg-base-200 shadow-xl mt-6">
       <div class="card-body">
@@ -180,7 +232,17 @@ const healthStatus = ref({
 const mydumperVersion = ref(null)
 const myloaderVersion = ref(null)
 
+const workerStatus = ref({
+  is_running: false,
+  last_tick: null,
+  total_ticks: 0,
+  tasks_executed: 0,
+  status_color: 'gray',
+  status_text: 'Not started'
+})
+
 const loading = ref(true)
+const workerLoading = ref(false)
 const error = ref(null)
 
 const uptime = computed(() => {
@@ -221,12 +283,54 @@ const diskSpace = computed(() => {
   return 'Unknown'
 })
 
+const lastTickFormatted = computed(() => {
+  if (!workerStatus.value.last_tick) return 'Never'
+  const date = new Date(workerStatus.value.last_tick)
+  return date.toLocaleString()
+})
+
+const lastTickRelative = computed(() => {
+  if (!workerStatus.value.last_tick) return 'No ticks recorded'
+  const now = new Date()
+  const lastTick = new Date(workerStatus.value.last_tick)
+  const diffMs = now - lastTick
+  const diffSeconds = Math.floor(diffMs / 1000)
+  const diffMinutes = Math.floor(diffSeconds / 60)
+  const diffHours = Math.floor(diffMinutes / 60)
+  
+  if (diffSeconds < 60) {
+    return `${diffSeconds} seconds ago`
+  } else if (diffMinutes < 60) {
+    return `${diffMinutes} minutes ago`
+  } else {
+    return `${diffHours} hours ago`
+  }
+})
+
 const formatBytes = (bytes) => {
   if (bytes === 0) return '0 Bytes'
   const k = 1024
   const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB']
   const i = Math.floor(Math.log(bytes) / Math.log(k))
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
+}
+
+const loadWorkerStatus = async () => {
+  try {
+    workerLoading.value = true
+    const response = await systemApi.getWorkerStatus()
+    if (response.success) {
+      workerStatus.value = response.data
+    }
+  } catch (err) {
+    console.error('Failed to load worker status:', err)
+  } finally {
+    workerLoading.value = false
+  }
+}
+
+const refreshWorkerStatus = async () => {
+  await loadWorkerStatus()
 }
 
 const loadSystemData = async () => {
@@ -263,6 +367,9 @@ const loadSystemData = async () => {
     if (myloaderResponse.success) {
       myloaderVersion.value = myloaderResponse.data.version
     }
+
+    // Load worker status
+    await loadWorkerStatus()
 
   } catch (err) {
     console.error('Failed to load system data:', err)

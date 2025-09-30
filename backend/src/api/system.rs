@@ -1,19 +1,23 @@
 use axum::{
+    extract::State,
     routing::get,
     Router,
 };
 use serde_json::json;
-use std::process::Command;
+use std::{process::Command, sync::Arc};
+use crate::services::TaskWorker;
 
 use super::{ApiResult, success_response};
 
-pub fn routes() -> Router {
+pub fn routes(worker: Arc<TaskWorker>) -> Router {
     Router::new()
         .route("/info", get(get_system_info))
         .route("/version", get(get_version_info))
         .route("/health", get(get_health_status))
+        .route("/worker", get(get_worker_status))
         .route("/mydumper/version", get(get_mydumper_version))
         .route("/myloader/version", get(get_myloader_version))
+        .with_state(worker)
 }
 
 async fn get_system_info() -> ApiResult<impl axum::response::IntoResponse> {
@@ -64,6 +68,35 @@ async fn get_health_status() -> ApiResult<impl axum::response::IntoResponse> {
             "disk_space": disk_space
         },
         "timestamp": chrono::Utc::now().to_rfc3339()
+    })))
+}
+
+async fn get_worker_status(
+    State(worker): State<Arc<TaskWorker>>,
+) -> ApiResult<impl axum::response::IntoResponse> {
+    let status = worker.get_status();
+    let now = chrono::Utc::now();
+    
+    let (status_color, status_text) = match status.last_tick {
+        Some(last_tick) => {
+            let duration = now - last_tick;
+            if duration.num_seconds() <= 60 {
+                ("green".to_string(), "Running".to_string())
+            } else {
+                ("red".to_string(), "Stale".to_string())
+            }
+        }
+        None => ("gray".to_string(), "Not started".to_string()),
+    };
+
+    Ok(success_response(json!({
+        "is_running": status.is_running,
+        "last_tick": status.last_tick.map(|t| t.to_rfc3339()),
+        "total_ticks": status.total_ticks,
+        "tasks_executed": status.tasks_executed,
+        "status_color": status_color,
+        "status_text": status_text,
+        "timestamp": now.to_rfc3339()
     })))
 }
 

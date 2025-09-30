@@ -340,6 +340,16 @@ export const systemApi = {
       console.error('Failed to fetch myloader version:', error)
       return { success: false, error: error.message }
     }
+  },
+
+  async getWorkerStatus() {
+    try {
+      const response = await apiClient.request('/api/system/worker')
+      return response
+    } catch (error) {
+      console.error('Failed to fetch worker status:', error)
+      return { success: false, error: error.message }
+    }
   }
 }
 

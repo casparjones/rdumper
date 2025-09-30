@@ -459,7 +459,9 @@ const formatSchedule = (cronSchedule) => {
   
   const [minute, hour, day, month, weekday] = parts
   
-  // Common patterns
+  // Common patterns - check these first
+  if (cronSchedule === '* * * * *') return 'Every minute'
+  if (cronSchedule === '0 * * * *') return 'Every hour'
   if (cronSchedule === '0 0 * * *') return 'Daily at midnight'
   if (cronSchedule === '0 2 * * *') return 'Daily at 2:00 AM'
   if (cronSchedule === '0 0 * * 0') return 'Weekly on Sunday at midnight'
@@ -474,7 +476,12 @@ const formatSchedule = (cronSchedule) => {
     description += `At ${hour}:${minute.padStart(2, '0')}`
   }
   
-  if (day === '*' && month === '*' && weekday === '*') {
+  // Check frequency based on all fields
+  if (minute === '*' && hour === '*' && day === '*' && month === '*' && weekday === '*') {
+    description = 'Every minute'
+  } else if (minute === '0' && hour === '*' && day === '*' && month === '*' && weekday === '*') {
+    description = 'Every hour'
+  } else if (day === '*' && month === '*' && weekday === '*') {
     description = 'Daily ' + description
   } else if (day === '*' && month === '*' && weekday !== '*') {
     const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']

@@ -111,12 +111,17 @@ async fn create_task(
         return Err(ApiError::BadRequest("Invalid cron schedule format. Expected: 'min hour day month weekday'".to_string()));
     }
 
-    let task = Task::new(req);
+    let mut task = Task::new(req);
+    
+    // Calculate next run time based on cron schedule
+    if let Err(e) = task.update_next_run() {
+        return Err(ApiError::BadRequest(format!("Invalid cron schedule: {}", e)));
+    }
 
     sqlx::query(
         r#"
-        INSERT INTO tasks (id, name, database_config_id, cron_schedule, compression_type, cleanup_days, is_active, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO tasks (id, name, database_config_id, cron_schedule, compression_type, cleanup_days, use_non_transactional, is_active, last_run, next_run, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         "#
     )
     .bind(&task.id)
@@ -125,7 +130,10 @@ async fn create_task(
     .bind(&task.cron_schedule)
     .bind(&task.compression_type)
     .bind(&task.cleanup_days)
+    .bind(&task.use_non_transactional)
     .bind(&task.is_active)
+    .bind(&task.last_run)
+    .bind(&task.next_run)
     .bind(&task.created_at)
     .bind(&task.updated_at)
     .execute(&pool)
@@ -155,11 +163,16 @@ async fn update_task(
     }
 
     task.update(req);
+    
+    // Recalculate next run time if cron schedule or active status changed
+    if let Err(e) = task.update_next_run() {
+        return Err(ApiError::BadRequest(format!("Invalid cron schedule: {}", e)));
+    }
 
     sqlx::query(
         r#"
         UPDATE tasks 
-        SET name = ?, cron_schedule = ?, compression_type = ?, cleanup_days = ?, is_active = ?, updated_at = ?
+        SET name = ?, cron_schedule = ?, compression_type = ?, cleanup_days = ?, use_non_transactional = ?, is_active = ?, next_run = ?, updated_at = ?
         WHERE id = ?
         "#
     )
@@ -167,7 +180,9 @@ async fn update_task(
     .bind(&task.cron_schedule)
     .bind(&task.compression_type)
     .bind(&task.cleanup_days)
+    .bind(&task.use_non_transactional)
     .bind(&task.is_active)
+    .bind(&task.next_run)
     .bind(&task.updated_at)
     .bind(&task.id)
     .execute(&pool)

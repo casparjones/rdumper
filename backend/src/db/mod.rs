@@ -67,6 +67,25 @@ async fn run_migrations(pool: &SqlitePool) -> Result<()> {
         .await
         .ok(); // Ignore error if column already exists
 
+    // Add last_run and next_run columns to existing tasks table if they don't exist
+    sqlx::query(
+        r#"
+        ALTER TABLE tasks ADD COLUMN last_run TEXT
+        "#
+    )
+        .execute(pool)
+        .await
+        .ok(); // Ignore error if column already exists
+
+    sqlx::query(
+        r#"
+        ALTER TABLE tasks ADD COLUMN next_run TEXT
+        "#
+    )
+        .execute(pool)
+        .await
+        .ok(); // Ignore error if column already exists
+
     // Create jobs table
     sqlx::query(
         r#"
