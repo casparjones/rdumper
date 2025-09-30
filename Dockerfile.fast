@@ -1,0 +1,84 @@
+# Simplified Dockerfile for faster builds
+FROM rust:alpine AS backend-builder
+
+# Install build dependencies
+RUN apk add --no-cache \
+    musl-dev \
+    openssl-dev \
+    openssl-libs-static \
+    pkgconfig \
+    sqlite-dev \
+    sqlite-static \
+    git
+
+WORKDIR /app
+COPY backend/Cargo.toml ./
+COPY backend/src ./src
+
+# Build arguments for build-time information
+ARG GIT_COMMIT
+ARG BUILD_DATE
+
+# Set build-time environment variables
+ENV GIT_COMMIT=${GIT_COMMIT}
+ENV BUILD_DATE=${BUILD_DATE}
+
+# Build the application
+RUN cargo build --release
+
+# Runtime stage
+FROM alpine:latest
+
+# Install runtime dependencies
+RUN apk add --no-cache \
+    tar \
+    gzip \
+    zstd \
+    ca-certificates \
+    sqlite \
+    mariadb-client
+
+# Create app user and directories
+RUN adduser -D -s /bin/false rdumper && \
+    mkdir -p /app/data/backups /app/data/logs /app/data/db /app/static && \
+    chown -R rdumper:rdumper /app && \
+    chmod 755 /app/data /app/data/backups /app/data/logs /app/data/db
+
+WORKDIR /app
+
+# Copy built backend
+COPY --from=backend-builder /app/target/release/rdumper-backend ./rdumper-backend
+
+# Copy pre-built frontend (expects frontend/dist to exist)
+COPY frontend/dist ./static
+
+# Change ownership
+RUN chown -R rdumper:rdumper /app
+
+# Switch to non-root user
+USER rdumper
+
+# Expose port
+EXPOSE 3000
+
+# Volumes
+VOLUME ["/app/data"]
+
+# Environment variables
+ENV RUST_LOG=info
+ENV DATABASE_URL=sqlite:///app/data/rdumper.db
+ENV BACKUP_DIR=/app/data/backups
+ENV LOG_DIR=/app/data/logs
+ENV STATIC_DIR=/app/static
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD wget --no-verbose --tries=1 --spider http://localhost:3000/api/health || exit 1
+
+# Create startup script
+RUN echo '#!/bin/sh' > /app/start.sh && \
+    echo 'exec ./rdumper-backend --host 0.0.0.0 --port 3000 --database-url "$DATABASE_URL" --backup-dir "$BACKUP_DIR" --log-dir "$LOG_DIR" --static-dir "$STATIC_DIR"' >> /app/start.sh && \
+    chmod +x /app/start.sh
+
+# Start the application
+CMD ["/app/start.sh"]
