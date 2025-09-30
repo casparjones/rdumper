@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2] - 2025-09-30
+
+### Added
+- **Background Task Worker**: Automated background service that runs every minute to check and execute scheduled tasks
+- **Cron Schedule Support**: Full cron expression parsing with support for common patterns
+- **Task Scheduling**: Tasks now have `last_run` and `next_run` fields for automatic execution tracking
+- **Worker Status Monitoring**: Real-time worker status display in System tab with health indicators
+- **Conflict Detection**: Automatic detection of running jobs to prevent overlapping executions
+- **Worker API Endpoints**: New `/api/worker/status` and `/api/system/worker` endpoints for monitoring
+
+### Changed
+- **Cron Parser**: Replaced problematic `cron` crate with custom implementation supporting:
+  - `* * * * *` - Every minute
+  - `0 * * * *` - Every hour  
+  - `0 1 * * *` - Daily at 1:00 AM (and any specific time)
+  - `0 0 * * *` - Daily at midnight
+  - `0 0 * * 1` - Weekly on Monday at midnight
+  - `*/5 * * * *` - Every 5 minutes
+  - `0 */2 * * *` - Every 2 hours
+- **Frontend Schedule Display**: Improved cron expression formatting with accurate descriptions
+- **Task Model**: Enhanced with cron parsing methods and next run calculation
+- **Database Schema**: Added `last_run` and `next_run` columns to tasks table
+
+### Fixed
+- **Cron Expression Parsing**: Resolved issues with `* * * * *` and `0 1 * * *` expressions
+- **Frontend Display**: Fixed `* * * * *` showing "Daily" instead of "Every minute"
+- **Worker Integration**: Proper integration of background worker with main application
+- **Job Conflict Handling**: Automatic cancellation of overlapping jobs with clear error messages
+
+### Technical Improvements
+- **Background Processing**: Tokio-based background worker with 60-second intervals
+- **Thread Safety**: Arc<Mutex<WorkerStatus>> for safe status sharing across threads
+- **Error Handling**: Comprehensive error handling for cron parsing and task execution
+- **Status Tracking**: Real-time worker health monitoring with color-coded indicators
+- **API Design**: RESTful endpoints for worker status and system information
+
 ## [0.1.1] - 2025-09-29
 
 ### Added
