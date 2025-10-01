@@ -37,18 +37,27 @@ impl MydumperService {
 
         for row in rows {
             let table_name: String = row.get("TABLE_NAME");
-            let engine: String = row.get("ENGINE");
+            let engine: Option<String> = row.get("ENGINE");
             
-            match engine.to_uppercase().as_str() {
+            // Handle NULL engine values gracefully
+            let engine_str = match engine {
+                Some(eng) => eng,
+                None => {
+                    warn!("Table '{}' has NULL engine, treating as InnoDB", table_name);
+                    "INNODB".to_string()
+                }
+            };
+            
+            match engine_str.to_uppercase().as_str() {
                 "INNODB" => {
                     innodb_tables.push(table_name);
                 }
                 "MYISAM" | "MEMORY" | "CSV" | "ARCHIVE" | "FEDERATED" | "MERGE" | "BLACKHOLE" => {
-                    excluded_tables.push(format!("{} ({})", table_name, engine));
+                    excluded_tables.push(format!("{} ({})", table_name, engine_str));
                 }
                 _ => {
                     // For unknown engines, include them but log a warning
-                    warn!("Unknown table engine '{}' for table '{}', including in backup", engine, table_name);
+                    warn!("Unknown table engine '{}' for table '{}', including in backup", engine_str, table_name);
                     innodb_tables.push(table_name);
                 }
             }
@@ -69,8 +78,20 @@ impl MydumperService {
     ) -> Result<String> {
         info!("Starting backup for database: {} (Job: {})", database_name, job_id);
 
+        // Update job status to running
+        if let Err(e) = self.update_job_status(pool, &job_id, "running", None, None).await {
+            error!("Failed to update job status to running: {}", e);
+        }
+
         // Analyze table engines for logging purposes
-        let (innodb_tables, excluded_tables) = self.analyze_table_engines(database_config, database_name).await?;
+        let (innodb_tables, excluded_tables) = match self.analyze_table_engines(database_config, database_name).await {
+            Ok(result) => result,
+            Err(e) => {
+                error!("Failed to analyze table engines for job {}: {}", job_id, e);
+                let _ = self.update_job_status(pool, &job_id, "failed", Some(&e.to_string()), None).await;
+                return Err(e);
+            }
+        };
         
         // Log table analysis results
         info!("Database {} analysis: {} InnoDB tables, {} non-InnoDB tables will be ignored", 
