@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.4] - 2025-10-01
+
+### Fixed
+- **Job Error Handling**: Fixed critical issue where jobs would remain stuck in `pending` status due to database engine analysis failures
+- **NULL Engine Handling**: Added graceful handling for NULL `ENGINE` values in MySQL table analysis
+- **ColumnDecode Error**: Resolved `ColumnDecode { index: "ENGINE", source: UnexpectedNullError }` panic in mydumper service
+- **Job Status Updates**: Improved job status management to ensure failed jobs are properly marked with error messages
+
+### Changed
+- **Database Engine Analysis**: Enhanced `analyze_table_engines` function to handle NULL engine values gracefully
+- **Error Propagation**: Jobs now properly transition to `failed` status with detailed error messages when database analysis fails
+- **Logging Improvements**: Added comprehensive error logging for database connection and analysis failures
+
+### Technical Details
+- **NULL Engine Fallback**: Tables with NULL engine values are now treated as InnoDB with appropriate warnings
+- **Job Status Management**: Immediate job status updates to `running` at start, `failed` on errors
+- **Error Message Storage**: Detailed error messages are now stored in job `error_message` field for debugging
+
 ## [0.1.3] - 2025-10-01
 
 ### Added
