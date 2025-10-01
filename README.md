@@ -1,4 +1,7 @@
-# rDumper
+<div align="center">
+  <img src="frontend/public/rdumper_logo.png" alt="rDumper Logo" width="200"/>
+  <h1>rDumper</h1>
+</div>
 
 A modern **web-based GUI wrapper** for [`mydumper`](https://github.com/mydumper/mydumper) and [`myloader`](https://github.com/mydumper/mydumper) — built with **Rust** (backend) and **Vue 3 + TailwindCSS + DaisyUI** (frontend).
 
