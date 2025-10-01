@@ -87,6 +87,7 @@ impl std::str::FromStr for JobStatus {
 pub struct Job {
     pub id: String,
     pub task_id: Option<String>,
+    pub used_database: Option<String>,
     pub job_type: String,
     pub status: String,
     pub progress: i32,
@@ -101,6 +102,7 @@ pub struct Job {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CreateJobRequest {
     pub task_id: Option<String>,
+    pub used_database: Option<String>,
     pub job_type: JobType,
     pub backup_path: Option<String>,
 }
@@ -111,6 +113,7 @@ impl Job {
         Self {
             id: Uuid::new_v4().to_string(),
             task_id: req.task_id,
+            used_database: req.used_database,
             job_type: req.job_type.to_string(),
             status: JobStatus::default().to_string(),
             progress: 0,

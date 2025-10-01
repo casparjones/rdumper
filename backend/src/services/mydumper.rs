@@ -20,22 +20,15 @@ impl MydumperService {
     }
 
     /// Analyze table engines and return InnoDB tables, excluding MyISAM and other non-transactional engines
-    async fn analyze_table_engines(&self, database_config: &DatabaseConfig) -> Result<(Vec<String>, Vec<String>)> {
-        let connection_string = format!(
-            "mysql://{}:{}@{}:{}/{}",
-            database_config.username,
-            database_config.password,
-            database_config.host,
-            database_config.port,
-            database_config.database_name
-        );
+    async fn analyze_table_engines(&self, database_config: &DatabaseConfig, database_name: &str) -> Result<(Vec<String>, Vec<String>)> {
+        let connection_string = database_config.connection_string_with_db(database_name);
 
         let pool = MySqlPool::connect(&connection_string).await?;
         
         // Query to get table names and their engines
         let query = "SELECT TABLE_NAME, ENGINE FROM information_schema.TABLES WHERE TABLE_SCHEMA = ?";
         let rows = sqlx::query(query)
-            .bind(&database_config.database_name)
+            .bind(database_name)
             .fetch_all(&pool)
             .await?;
 
@@ -69,18 +62,19 @@ impl MydumperService {
     pub async fn create_backup_with_progress(
         &self,
         database_config: &DatabaseConfig,
+        database_name: &str,
         task: &Task,
         job_id: String,
         pool: &SqlitePool,
     ) -> Result<String> {
-        info!("Starting backup for database: {} (Job: {})", database_config.database_name, job_id);
+        info!("Starting backup for database: {} (Job: {})", database_name, job_id);
 
         // Analyze table engines for logging purposes
-        let (innodb_tables, excluded_tables) = self.analyze_table_engines(database_config).await?;
+        let (innodb_tables, excluded_tables) = self.analyze_table_engines(database_config, database_name).await?;
         
         // Log table analysis results
         info!("Database {} analysis: {} InnoDB tables, {} non-InnoDB tables will be ignored", 
-              database_config.database_name, innodb_tables.len(), excluded_tables.len());
+              database_name, innodb_tables.len(), excluded_tables.len());
         
         if !excluded_tables.is_empty() {
             warn!("Ignoring non-InnoDB tables: {}", excluded_tables.join(", "));
@@ -103,14 +97,14 @@ impl MydumperService {
             "count": table_count,
             "tables": innodb_tables.iter().map(|t| t.clone()).collect::<Vec<String>>(),
             "excluded_tables": excluded_tables.iter().map(|t| t.clone()).collect::<Vec<String>>(),
-            "database_name": database_config.database_name,
+            "database_name": database_name,
             "started_at": chrono::Utc::now().to_rfc3339()
         });
         
         std::fs::write(&meta_file, serde_json::to_string_pretty(&rdumper_meta)?)?;
 
         info!("Database {} has {} total tables ({} InnoDB will be backed up)", 
-              database_config.database_name, table_count, innodb_tables.len());
+              database_name, table_count, innodb_tables.len());
 
         // Create log file
         let log_file_path = format!("{}/mydumper.log", log_dir);
@@ -122,7 +116,7 @@ impl MydumperService {
         // Write initial log entry
         let start_log = format!("[{}] INFO: Starting backup for database: {}\n", 
             chrono::Utc::now().format("%Y-%m-%d %H:%M:%S"), 
-            database_config.database_name);
+            database_name);
         log_file.write_all(start_log.as_bytes()).await?;
         log_file.flush().await?;
 
@@ -132,7 +126,7 @@ impl MydumperService {
             .arg("--port").arg(database_config.port.to_string())
             .arg("--user").arg(&database_config.username)
             .arg("--password").arg(&database_config.password)
-            .arg("--database").arg(&database_config.database_name)
+            .arg("--database").arg(database_name)
             .arg("--outputdir").arg(backup_process.tmp_dir())
             .arg("--verbose").arg("3")
             .arg("--threads").arg("4")
@@ -165,7 +159,7 @@ impl MydumperService {
             }
         }
 
-        info!("Executing mydumper command for database: {}", database_config.database_name);
+        info!("Executing mydumper command for database: {}", database_name);
 
         // Execute mydumper command and wait for completion
         let status = cmd.status().await?;
@@ -183,7 +177,7 @@ impl MydumperService {
             return Err(anyhow!("mydumper failed: {}", error_msg));
         }
 
-        info!("MyDumper completed successfully for database: {}", database_config.database_name);
+        info!("MyDumper completed successfully for database: {}", database_name);
 
         // Update job status to compressing before creating archive
         self.update_job_status(pool, &job_id, "compressing", None, Some(&log_file_path)).await?;
@@ -341,7 +335,7 @@ impl MydumperService {
             backup_path.to_string_lossy().to_string()
         };
 
-        let target_database = new_database_name.unwrap_or(&database_config.database_name);
+        let target_database = new_database_name.unwrap_or("restored_db");
 
         // If creating a new database, create it first
         if let Some(new_db_name) = new_database_name {

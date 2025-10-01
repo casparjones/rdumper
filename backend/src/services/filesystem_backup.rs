@@ -85,6 +85,7 @@ impl FilesystemBackupService {
                                     database_name: metadata.database_name,
                                     database_config_id: metadata.database_config_id,
                                     task_id: metadata.task_id,
+                                    used_database: metadata.used_database,
                                     file_path: backup_file.to_string_lossy().to_string(),
                                     meta_path: meta_file.to_string_lossy().to_string(),
                                     file_size: metadata.file_size,
@@ -215,6 +216,7 @@ impl FilesystemBackupService {
             "database_name": database_name,
             "database_config_id": "unknown",
             "task_id": null,
+            "used_database": null,
             "file_path": backup_path.to_string_lossy(),
             "meta_path": meta_file.to_string_lossy(),
             "file_size": file_size,
@@ -280,6 +282,7 @@ impl FilesystemBackupService {
             database_name: metadata.database_name,
             database_config_id: metadata.database_config_id,
             task_id: metadata.task_id,
+            used_database: metadata.used_database,
             file_path: backup_path.to_string_lossy().to_string(),
             meta_path: meta_path.to_string_lossy().to_string(),
             file_size: metadata.file_size,
@@ -376,8 +379,19 @@ impl FilesystemBackupService {
             use_non_transactional: t.use_non_transactional,
         });
         
+        // Determine used_database for this backup
+        let used_database = if let Some(task) = task {
+            let database_name = match &task.database_name {
+                Some(db_name) => db_name.clone(),
+                None => database_config.database_name.clone(),
+            };
+            Some(format!("{}/{}", database_config.name, database_name))
+        } else {
+            Some(format!("{}/{}", database_config.name, database_config.database_name))
+        };
+
         // Create initial backup object
-        let backup = Backup::new(
+        let mut backup = Backup::new(
             database_config.database_name.clone(),
             database_config.id.clone(),
             task.map(|t| t.id.clone()),
@@ -387,6 +401,7 @@ impl FilesystemBackupService {
             compression_type.to_string(),
             backup_type.to_string(),
         );
+        backup.used_database = used_database;
         
         // Create initial metadata (without hash yet)
         let mut backup_metadata = BackupMetadata::new(&backup, database_config_info.clone(), task_info.clone());

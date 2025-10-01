@@ -47,6 +47,7 @@ pub struct Task {
     pub id: String,
     pub name: String,
     pub database_config_id: String,
+    pub database_name: Option<String>, // Specific database name for this task
     pub cron_schedule: String,
     pub compression_type: String,
     pub cleanup_days: i32,
@@ -62,6 +63,7 @@ pub struct Task {
 pub struct CreateTaskRequest {
     pub name: String,
     pub database_config_id: String,
+    pub database_name: Option<String>, // Specific database name for this task
     pub cron_schedule: String,
     pub compression_type: Option<CompressionType>,
     pub cleanup_days: Option<i32>,
@@ -71,6 +73,7 @@ pub struct CreateTaskRequest {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct UpdateTaskRequest {
     pub name: Option<String>,
+    pub database_name: Option<String>,
     pub cron_schedule: Option<String>,
     pub compression_type: Option<CompressionType>,
     pub cleanup_days: Option<i32>,
@@ -85,6 +88,7 @@ impl Task {
             id: Uuid::new_v4().to_string(),
             name: req.name,
             database_config_id: req.database_config_id,
+            database_name: req.database_name,
             cron_schedule: req.cron_schedule,
             compression_type: req.compression_type.unwrap_or_default().to_string(),
             cleanup_days: req.cleanup_days.unwrap_or(30),
@@ -100,6 +104,9 @@ impl Task {
     pub fn update(&mut self, req: UpdateTaskRequest) {
         if let Some(name) = req.name {
             self.name = name;
+        }
+        if let Some(database_name) = req.database_name {
+            self.database_name = Some(database_name);
         }
         if let Some(cron_schedule) = req.cron_schedule {
             self.cron_schedule = cron_schedule;

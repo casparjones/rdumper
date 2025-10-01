@@ -101,11 +101,23 @@ impl BackupProcess {
             use_non_transactional: t.use_non_transactional,
         });
         
+        // Determine used_database for this backup
+        let used_database = if let Some(task) = &self.task {
+            let database_name = match &task.database_name {
+                Some(db_name) => db_name.clone(),
+                None => self.database_config.database_name.clone(),
+            };
+            Some(format!("{}/{}", self.database_config.name, database_name))
+        } else {
+            Some(format!("{}/{}", self.database_config.name, self.database_config.database_name))
+        };
+
         let backup_metadata = BackupMetadata {
             id: self.id.clone(),
             database_name: self.database_config.database_name.clone(),
             database_config_id: self.database_config.id.clone(),
             task_id: self.task.as_ref().map(|t| t.id.clone()),
+            used_database,
             file_path: String::new(), // Will be set when archive is created
             meta_path: self.meta_file.to_string_lossy().to_string(),
             file_size: 0, // Will be set when archive is created

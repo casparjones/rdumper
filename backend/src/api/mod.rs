@@ -2,6 +2,7 @@ pub mod database_configs;
 pub mod tasks;
 pub mod jobs;
 pub mod backups;
+pub mod logs;
 pub mod system;
 pub mod dashboard;
 pub mod worker;
@@ -23,6 +24,7 @@ pub fn create_routes(pool: SqlitePool, worker: Arc<TaskWorker>) -> Router {
         .nest("/api/tasks", tasks::routes(pool.clone()))
         .nest("/api/jobs", jobs::routes(pool.clone()))
         .nest("/api/backups", backups::routes(pool.clone()))
+        .nest("/api/logs", logs::routes(pool.clone()))
         .nest("/api/system", system::routes(worker.clone()))
         .nest("/api/dashboard", dashboard::routes(pool.clone()))
         .nest("/api/worker", worker::routes(worker))

@@ -5,9 +5,11 @@ use axum::{
 };
 use serde::Deserialize;
 use sqlx::SqlitePool;
+use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::models::{DatabaseConfig, CreateDatabaseConfigRequest, UpdateDatabaseConfigRequest};
+use crate::models::{DatabaseConfig, CreateDatabaseConfigRequest, UpdateDatabaseConfigRequest, LogLevel};
+use crate::services::LoggingService;
 use super::{ApiError, ApiResult, success_response, paginated_response};
 
 #[derive(Deserialize)]
@@ -23,6 +25,7 @@ pub fn routes(pool: SqlitePool) -> Router {
         .route("/:id", get(get_database_config).put(update_database_config).delete(delete_database_config))
         .route("/:id/test", post(test_database_connection))
         .route("/:id/permissions", get(check_database_permissions))
+        .route("/:id/databases", get(get_available_databases))
         .with_state(pool)
 }
 
@@ -77,6 +80,7 @@ async fn create_database_config(
     State(pool): State<SqlitePool>,
     Json(req): Json<CreateDatabaseConfigRequest>,
 ) -> ApiResult<impl axum::response::IntoResponse> {
+    let logging_service = LoggingService::new(Arc::new(pool.clone()));
     // Check if name already exists
     let existing: Option<(String,)> = sqlx::query_as(
         "SELECT id FROM database_configs WHERE name = ?"
@@ -93,8 +97,8 @@ async fn create_database_config(
 
     sqlx::query(
         r#"
-        INSERT INTO database_configs (id, name, host, port, username, password, database_name, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO database_configs (id, name, host, port, username, password, database_name, connection_status, last_tested, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         "#
     )
     .bind(&config.id)
@@ -104,10 +108,15 @@ async fn create_database_config(
     .bind(&config.username)
     .bind(&config.password)
     .bind(&config.database_name)
+    .bind(&config.connection_status)
+    .bind(&config.last_tested)
     .bind(&config.created_at)
     .bind(&config.updated_at)
     .execute(&pool)
     .await?;
+
+    // Log the creation
+    let _ = logging_service.log_connection(&config.id, &format!("Database configuration '{}' created", config.name), LogLevel::Info).await;
 
     Ok(success_response(config))
 }
@@ -145,7 +154,7 @@ async fn update_database_config(
     sqlx::query(
         r#"
         UPDATE database_configs 
-        SET name = ?, host = ?, port = ?, username = ?, password = ?, database_name = ?, updated_at = ?
+        SET name = ?, host = ?, port = ?, username = ?, password = ?, database_name = ?, connection_status = ?, last_tested = ?, updated_at = ?
         WHERE id = ?
         "#
     )
@@ -155,6 +164,8 @@ async fn update_database_config(
     .bind(&config.username)
     .bind(&config.password)
     .bind(&config.database_name)
+    .bind(&config.connection_status)
+    .bind(&config.last_tested)
     .bind(&config.updated_at)
     .bind(&config.id)
     .execute(&pool)
@@ -180,16 +191,63 @@ async fn delete_database_config(
 }
 
 async fn test_database_connection(
-    State(_pool): State<SqlitePool>,
-    Path(_id): Path<String>,
+    State(pool): State<SqlitePool>,
+    Path(id): Path<String>,
 ) -> ApiResult<impl axum::response::IntoResponse> {
-    // TODO: Implement actual connection testing using mydumper or mysql client
-    // For now, return a mock response
-    Ok(success_response(serde_json::json!({
-        "success": true,
-        "message": "Connection test successful",
-        "timestamp": chrono::Utc::now().to_rfc3339()
-    })))
+    // Get database config
+    let mut config: DatabaseConfig = sqlx::query_as(
+        "SELECT * FROM database_configs WHERE id = ?"
+    )
+    .bind(&id)
+    .fetch_optional(&pool)
+    .await?
+    .ok_or_else(|| ApiError::NotFound("Database configuration not found".to_string()))?;
+
+    // Test connection
+    let connection_string = config.connection_string();
+    let test_result = match sqlx::MySqlPool::connect(&connection_string).await {
+        Ok(mysql_pool) => {
+            // Test basic query
+            match sqlx::query("SELECT 1").fetch_one(&mysql_pool).await {
+                Ok(_) => {
+                    config.mark_connection_tested(true);
+                    Ok(serde_json::json!({
+                        "success": true,
+                        "message": "Connection test successful",
+                        "timestamp": chrono::Utc::now().to_rfc3339()
+                    }))
+                },
+                Err(e) => {
+                    config.mark_connection_tested(false);
+                    Err(ApiError::InternalError(format!("Database query failed: {}", e)))
+                }
+            }
+        },
+        Err(e) => {
+            config.mark_connection_tested(false);
+            Err(ApiError::InternalError(format!("Failed to connect to database: {}", e)))
+        }
+    };
+
+    // Update connection status in database
+    sqlx::query(
+        r#"
+        UPDATE database_configs 
+        SET connection_status = ?, last_tested = ?, updated_at = ?
+        WHERE id = ?
+        "#
+    )
+    .bind(&config.connection_status)
+    .bind(&config.last_tested)
+    .bind(&config.updated_at)
+    .bind(&config.id)
+    .execute(&pool)
+    .await?;
+
+    match test_result {
+        Ok(response) => Ok(success_response(response)),
+        Err(e) => Err(e),
+    }
 }
 
 async fn check_database_permissions(
@@ -233,16 +291,20 @@ async fn check_database_permissions(
 
     // Test if user can create tables by trying to create a test table
     let test_table_name = format!("rdumper_test_{}", uuid::Uuid::new_v4().to_string().replace('-', "")[..8].to_string());
-    let can_create_tables = sqlx::query(&format!(
-        "CREATE TABLE IF NOT EXISTS `{}`.`{}` (id INT PRIMARY KEY)", 
-        config.database_name, test_table_name
-    ))
-    .execute(&pool)
-    .await
-    .is_ok();
+    let can_create_tables = if !config.database_name.is_empty() {
+        sqlx::query(&format!(
+            "CREATE TABLE IF NOT EXISTS `{}`.`{}` (id INT PRIMARY KEY)", 
+            config.database_name, test_table_name
+        ))
+        .execute(&pool)
+        .await
+        .is_ok()
+    } else {
+        false // Can't create tables without a specific database
+    };
     
     // Clean up test table if we created it
-    if can_create_tables {
+    if can_create_tables && !config.database_name.is_empty() {
         let _ = sqlx::query(&format!("DROP TABLE IF EXISTS `{}`.`{}`", config.database_name, test_table_name))
             .execute(&pool)
             .await;
@@ -259,6 +321,36 @@ async fn check_database_permissions(
         "can_create_tables": can_create_tables,
         "existing_databases": databases,
         "current_database": config.database_name,
+        "timestamp": chrono::Utc::now().to_rfc3339()
+    })))
+}
+
+async fn get_available_databases(
+    State(pool): State<SqlitePool>,
+    Path(id): Path<String>,
+) -> ApiResult<impl axum::response::IntoResponse> {
+    // Get database config
+    let config: DatabaseConfig = sqlx::query_as(
+        "SELECT * FROM database_configs WHERE id = ?"
+    )
+    .bind(&id)
+    .fetch_one(&pool)
+    .await?;
+
+    // Test connection and get available databases
+    let connection_string = config.connection_string();
+    let mysql_pool = sqlx::MySqlPool::connect(&connection_string).await
+        .map_err(|e| ApiError::InternalError(format!("Failed to connect to database: {}", e)))?;
+
+    // Get list of available databases
+    let databases: Vec<String> = sqlx::query_scalar("SHOW DATABASES")
+        .fetch_all(&mysql_pool)
+        .await
+        .unwrap_or_default();
+
+    Ok(success_response(serde_json::json!({
+        "databases": databases,
+        "connection_status": config.connection_status,
         "timestamp": chrono::Utc::now().to_rfc3339()
     })))
 }

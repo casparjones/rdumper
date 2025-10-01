@@ -3,11 +3,20 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use serde::Deserialize;
-use sqlx::SqlitePool;
+use serde::{Deserialize, Serialize};
+use sqlx::{SqlitePool, Row};
 
 use crate::models::{Task, CreateTaskRequest, UpdateTaskRequest};
 use super::{ApiError, ApiResult, success_response, paginated_response};
+
+#[derive(Debug, Serialize)]
+pub struct TaskWithDatabaseInfo {
+    #[serde(flatten)]
+    pub task: Task,
+    pub db_config_name: Option<String>,
+    pub db_config_host: Option<String>,
+    pub db_config_database_name: Option<String>,
+}
 
 #[derive(Deserialize)]
 pub struct ListQuery {
@@ -34,16 +43,16 @@ async fn list_tasks(
     let limit = query.limit.unwrap_or(10);
     let offset = (page - 1) * limit;
 
-    let mut sql = "SELECT * FROM tasks".to_string();
-    let mut count_sql = "SELECT COUNT(*) as count FROM tasks".to_string();
+    let mut sql = "SELECT t.*, dc.name as db_config_name, dc.host as db_config_host, dc.database_name as db_config_database_name FROM tasks t LEFT JOIN database_configs dc ON t.database_config_id = dc.id".to_string();
+    let mut count_sql = "SELECT COUNT(*) as count FROM tasks t LEFT JOIN database_configs dc ON t.database_config_id = dc.id".to_string();
     let mut conditions = Vec::new();
     
     if query.database_config_id.is_some() {
-        conditions.push("database_config_id = ?");
+        conditions.push("t.database_config_id = ?");
     }
     
     if query.is_active.is_some() {
-        conditions.push("is_active = ?");
+        conditions.push("t.is_active = ?");
     }
     
     if !conditions.is_empty() {
@@ -52,9 +61,9 @@ async fn list_tasks(
         count_sql.push_str(&where_clause);
     }
     
-    sql.push_str(&format!(" ORDER BY created_at DESC LIMIT {} OFFSET {}", limit, offset));
+    sql.push_str(&format!(" ORDER BY t.created_at DESC LIMIT {} OFFSET {}", limit, offset));
 
-    let mut query_builder = sqlx::query_as(&sql);
+    let mut query_builder = sqlx::query(&sql);
     let mut count_query_builder = sqlx::query_as(&count_sql);
     
     if let Some(ref db_config_id) = query.database_config_id {
@@ -67,8 +76,31 @@ async fn list_tasks(
         count_query_builder = count_query_builder.bind(is_active);
     }
 
-    let tasks: Vec<Task> = query_builder.fetch_all(&pool).await?;
+    let rows = query_builder.fetch_all(&pool).await?;
     let total: (i64,) = count_query_builder.fetch_one(&pool).await?;
+
+    let tasks: Vec<TaskWithDatabaseInfo> = rows.into_iter().map(|row| {
+        TaskWithDatabaseInfo {
+            task: Task {
+                id: row.get("id"),
+                name: row.get("name"),
+                database_config_id: row.get("database_config_id"),
+                database_name: row.get("database_name"),
+                cron_schedule: row.get("cron_schedule"),
+                compression_type: row.get("compression_type"),
+                cleanup_days: row.get("cleanup_days"),
+                use_non_transactional: row.get("use_non_transactional"),
+                is_active: row.get("is_active"),
+                created_at: row.get("created_at"),
+                updated_at: row.get("updated_at"),
+                last_run: row.get("last_run"),
+                next_run: row.get("next_run"),
+            },
+            db_config_name: row.get("db_config_name"),
+            db_config_host: row.get("db_config_host"),
+            db_config_database_name: row.get("db_config_database_name"),
+        }
+    }).collect();
 
     Ok(paginated_response(tasks, page, limit, total.0 as u64))
 }
@@ -120,13 +152,14 @@ async fn create_task(
 
     sqlx::query(
         r#"
-        INSERT INTO tasks (id, name, database_config_id, cron_schedule, compression_type, cleanup_days, use_non_transactional, is_active, last_run, next_run, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO tasks (id, name, database_config_id, database_name, cron_schedule, compression_type, cleanup_days, use_non_transactional, is_active, last_run, next_run, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         "#
     )
     .bind(&task.id)
     .bind(&task.name)
     .bind(&task.database_config_id)
+    .bind(&task.database_name)
     .bind(&task.cron_schedule)
     .bind(&task.compression_type)
     .bind(&task.cleanup_days)
@@ -172,11 +205,12 @@ async fn update_task(
     sqlx::query(
         r#"
         UPDATE tasks 
-        SET name = ?, cron_schedule = ?, compression_type = ?, cleanup_days = ?, use_non_transactional = ?, is_active = ?, next_run = ?, updated_at = ?
+        SET name = ?, database_name = ?, cron_schedule = ?, compression_type = ?, cleanup_days = ?, use_non_transactional = ?, is_active = ?, next_run = ?, updated_at = ?
         WHERE id = ?
         "#
     )
     .bind(&task.name)
+    .bind(&task.database_name)
     .bind(&task.cron_schedule)
     .bind(&task.compression_type)
     .bind(&task.cleanup_days)
@@ -195,6 +229,17 @@ async fn delete_task(
     State(pool): State<SqlitePool>,
     Path(id): Path<String>,
 ) -> ApiResult<impl axum::response::IntoResponse> {
+    use crate::services::logging::LoggingService;
+    use std::sync::Arc;
+    
+    // Get task info before deletion for logging
+    let task: Option<Task> = sqlx::query_as("SELECT * FROM tasks WHERE id = ?")
+        .bind(&id)
+        .fetch_optional(&pool)
+        .await?;
+    
+    let task_name = task.as_ref().map(|t| t.name.clone()).unwrap_or_else(|| "Unknown".to_string());
+    
     let result = sqlx::query("DELETE FROM tasks WHERE id = ?")
         .bind(&id)
         .execute(&pool)
@@ -203,6 +248,15 @@ async fn delete_task(
     if result.rows_affected() == 0 {
         return Err(ApiError::NotFound("Task not found".to_string()));
     }
+
+    // Log the deletion
+    let logging_service = LoggingService::new(Arc::new(pool.clone()));
+    let _ = logging_service.log_system_with_entity(
+        "task",
+        &id,
+        &format!("Task '{}' deleted", task_name),
+        crate::models::log::LogLevel::Info
+    ).await;
 
     Ok(success_response(serde_json::json!({"message": "Task deleted successfully"})))
 }
@@ -232,9 +286,24 @@ async fn run_task_now(
     .await?
     .ok_or_else(|| ApiError::NotFound("Database configuration not found".to_string()))?;
 
+    // Get database info for this task
+    let database_name = match &task.database_name {
+        Some(db_name) => db_name.clone(),
+        None => {
+            match db_config.get_database_name() {
+                Some(db_name) => db_name.clone(),
+                None => {
+                    return Err(ApiError::BadRequest("No database name specified for task and config has no default database".to_string()));
+                }
+            }
+        }
+    };
+    let used_database = format!("{}/{}", db_config.name, database_name);
+
     // Create a new job for this task execution
     let job_request = CreateJobRequest {
         task_id: Some(task.id.clone()),
+        used_database: Some(used_database),
         job_type: JobType::Backup,
         backup_path: None,
     };
@@ -245,12 +314,13 @@ async fn run_task_now(
     // Insert the job into the database
     sqlx::query(
         r#"
-        INSERT INTO jobs (id, task_id, job_type, status, progress, started_at, completed_at, error_message, log_output, backup_path, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO jobs (id, task_id, used_database, job_type, status, progress, started_at, completed_at, error_message, log_output, backup_path, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         "#
     )
     .bind(&job.id)
     .bind(&job.task_id)
+    .bind(&job.used_database)
     .bind(&job.job_type)
     .bind(&job.status)
     .bind(&job.progress)
@@ -277,8 +347,23 @@ async fn run_task_now(
     let pool_clone = pool.clone();
     
     tokio::spawn(async move {
+        // Determine the database name to use
+        let database_name = match &task_clone.database_name {
+            Some(db_name) => db_name.clone(),
+            None => {
+                // Use the database name from the config, or fail if none specified
+                match db_config_clone.get_database_name() {
+                    Some(db_name) => db_name.clone(),
+                    None => {
+                        tracing::error!("No database name specified for task {} and config has no default database", task_clone.id);
+                        return;
+                    }
+                }
+            }
+        };
+
         let result = mydumper_service
-            .create_backup_with_progress(&db_config_clone, &task_clone, job_id.clone(), &pool_clone)
+            .create_backup_with_progress(&db_config_clone, &database_name, &task_clone, job_id.clone(), &pool_clone)
             .await;
 
         match result {

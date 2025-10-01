@@ -6,13 +6,25 @@
           <h1 class="text-3xl font-bold text-base-content">Backups</h1>
           <p class="text-base-content/70 mt-2">Browse and restore your database backups</p>
         </div>
-        <button 
-          class="btn btn-primary"
-          @click="openUploadModal"
-          :disabled="uploading"
-        >
-          📤 Upload Backup
-        </button>
+        <div class="flex gap-3">
+          <button 
+            v-if="selectedBackups.length > 0"
+            @click="deleteSelectedBackups"
+            class="btn btn-error btn-sm"
+            :disabled="isDeleting"
+          >
+            <span v-if="isDeleting" class="loading loading-spinner loading-xs"></span>
+            <span v-else>🗑️</span>
+            Delete Selected ({{ selectedBackups.length }})
+          </button>
+          <button 
+            class="btn btn-primary"
+            @click="openUploadModal"
+            :disabled="uploading"
+          >
+            📤 Upload Backup
+          </button>
+        </div>
       </div>
     </div>
 
@@ -25,10 +37,19 @@
     <!-- Backups table -->
     <div v-if="!loading" class="card bg-base-200 shadow-xl">
       <div class="card-body">
+
         <div class="overflow-x-auto">
           <table class="table">
             <thead>
               <tr>
+                <th>
+                  <input 
+                    type="checkbox" 
+                    class="checkbox checkbox-primary checkbox-sm" 
+                    :checked="selectedBackups.length === backups.length && backups.length > 0"
+                    @change="toggleSelectAll"
+                  />
+                </th>
                 <th>Backup Name</th>
                 <th>Database</th>
                 <th>Size</th>
@@ -39,8 +60,16 @@
             </thead>
             <tbody>
               <tr v-for="backup in backups" :key="backup.id">
+                <td>
+                  <input 
+                    type="checkbox" 
+                    class="checkbox checkbox-primary checkbox-sm" 
+                    :checked="selectedBackups.includes(backup.id)"
+                    @change="toggleBackupSelection(backup.id)"
+                  />
+                </td>
                 <td>{{ getBackupName(backup) }}</td>
-                <td>{{ getDatabaseName(backup.database_config_id) }}</td>
+                <td>{{ getDatabaseDisplayName(backup) }}</td>
                 <td>{{ formatFileSize(backup.file_size) }}</td>
                 <td>{{ formatDate(backup.created_at) }}</td>
                 <td>
@@ -390,6 +419,8 @@ const fileInput = ref(null)
 const editingBackup = ref(null)
 const savingMetadata = ref(false)
 const metadataModal = ref(null)
+const selectedBackups = ref([])
+const isDeleting = ref(false)
 
 // Restore form
 const restoreForm = ref({
@@ -421,6 +452,27 @@ const metadataForm = ref({
 const getDatabaseName = (configId) => {
   const config = databaseConfigs.value.find(c => c.id === configId)
   return config ? config.database_name : 'Unknown'
+}
+
+const getDatabaseDisplayName = (backup) => {
+  // Use used_database field if available (new format: "connection/database")
+  if (backup.used_database) {
+    return backup.used_database
+  }
+  
+  // For backups without used_database, show a static representation
+  // that won't change when the task is modified
+  if (backup.db_config_name) {
+    // Use task-specific database_name if available, otherwise use config's database_name
+    const database_name = backup.task_database_name || backup.db_config_database_name
+    if (database_name) {
+      return `${backup.db_config_name}/${database_name}`
+    } else {
+      return backup.db_config_name
+    }
+  }
+  // Fallback to old method
+  return getDatabaseName(backup.database_config_id)
 }
 
 const getBackupName = (backup) => {
@@ -741,6 +793,61 @@ const saveMetadata = async () => {
     console.error('Error updating metadata:', err)
   } finally {
     savingMetadata.value = false
+  }
+}
+
+// Multi-selection functions
+const toggleBackupSelection = (backupId) => {
+  const index = selectedBackups.value.indexOf(backupId)
+  if (index > -1) {
+    selectedBackups.value.splice(index, 1)
+  } else {
+    selectedBackups.value.push(backupId)
+  }
+}
+
+const toggleSelectAll = () => {
+  if (selectedBackups.value.length === backups.value.length) {
+    selectedBackups.value = []
+  } else {
+    selectedBackups.value = backups.value.map(backup => backup.id)
+  }
+}
+
+const deleteSelectedBackups = async () => {
+  if (selectedBackups.value.length === 0) return
+  
+  const backupCount = selectedBackups.value.length
+  const confirmed = confirm(`Are you sure you want to delete ${backupCount} backup(s)? This action cannot be undone.`)
+  if (!confirmed) return
+  
+  isDeleting.value = true
+  
+  try {
+    // Delete backups one by one to show progress
+    for (let i = 0; i < selectedBackups.value.length; i++) {
+      const backupId = selectedBackups.value[i]
+      await backupsApi.delete(backupId)
+      
+      // Remove from local state immediately for visual feedback
+      const backupIndex = backups.value.findIndex(backup => backup.id === backupId)
+      if (backupIndex > -1) {
+        backups.value.splice(backupIndex, 1)
+      }
+      
+      // Small delay to show the deletion progress
+      await new Promise(resolve => setTimeout(resolve, 200))
+    }
+    
+    // Clear selection
+    selectedBackups.value = []
+    
+    showToast(true, `Successfully deleted ${backupCount} backup(s)`)
+  } catch (err) {
+    console.error('Error deleting backups:', err)
+    showToast(false, 'Failed to delete some backups. Please try again.')
+  } finally {
+    isDeleting.value = false
   }
 }
 

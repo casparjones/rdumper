@@ -6,14 +6,25 @@ use axum::{
     body::Body,
 };
 use axum_extra::extract::Multipart;
-use serde::Deserialize;
-use sqlx::SqlitePool;
+use serde::{Deserialize, Serialize};
+use sqlx::{SqlitePool, Row};
 use std::path::Path as StdPath;
 use tracing::error;
 
 use crate::models::{Backup, RestoreRequest, Job, CreateJobRequest, JobType};
 use crate::services::FilesystemBackupService;
 use super::{ApiError, ApiResult, success_response, paginated_response};
+
+#[derive(Debug, Serialize)]
+pub struct BackupWithDatabaseInfo {
+    #[serde(flatten)]
+    pub backup: Backup,
+    pub task_name: Option<String>,
+    pub task_database_name: Option<String>,
+    pub db_config_name: Option<String>,
+    pub db_config_host: Option<String>,
+    pub db_config_database_name: Option<String>,
+}
 
 #[derive(Deserialize)]
 pub struct ListQuery {
@@ -36,12 +47,12 @@ pub fn routes(pool: SqlitePool) -> Router {
 }
 
 async fn list_backups(
-    State(_pool): State<SqlitePool>,
+    State(pool): State<SqlitePool>,
     Query(query): Query<ListQuery>,
 ) -> ApiResult<impl axum::response::IntoResponse> {
     let page = query.page.unwrap_or(1);
     let limit = query.limit.unwrap_or(10);
-    let _offset = (page - 1) * limit;
+    let offset = (page - 1) * limit;
 
     // Initialize filesystem backup service
     let backup_service = FilesystemBackupService::new(
@@ -72,7 +83,36 @@ async fn list_backups(
         Vec::new()
     };
 
-    Ok(paginated_response(backups, page, limit, total as u64))
+    // Enrich backups with database information
+    let mut enriched_backups = Vec::new();
+    for backup in backups {
+        let mut enriched_backup = BackupWithDatabaseInfo {
+            backup: backup.clone(),
+            task_name: None,
+            task_database_name: None,
+            db_config_name: None,
+            db_config_host: None,
+            db_config_database_name: None,
+        };
+
+        // Get task and database config info if available
+        if let Some(task_id) = &backup.task_id {
+            let sql = "SELECT t.name as task_name, t.database_name as task_database_name, dc.name as db_config_name, dc.host as db_config_host, dc.database_name as db_config_database_name FROM tasks t LEFT JOIN database_configs dc ON t.database_config_id = dc.id WHERE t.id = ?";
+            if let Ok(row) = sqlx::query(sql).bind(task_id).fetch_optional(&pool).await {
+                if let Some(row) = row {
+                    enriched_backup.task_name = row.get("task_name");
+                    enriched_backup.task_database_name = row.get("task_database_name");
+                    enriched_backup.db_config_name = row.get("db_config_name");
+                    enriched_backup.db_config_host = row.get("db_config_host");
+                    enriched_backup.db_config_database_name = row.get("db_config_database_name");
+                }
+            }
+        }
+
+        enriched_backups.push(enriched_backup);
+    }
+
+    Ok(paginated_response(enriched_backups, page, limit, total as u64))
 }
 
 async fn get_backup(
@@ -298,6 +338,17 @@ async fn delete_backup(
     backup_service.delete_backup(&backup).await
         .map_err(|e| ApiError::InternalError(format!("Failed to delete backup: {}", e)))?;
 
+    // Log the deletion
+    use crate::services::logging::LoggingService;
+    use std::sync::Arc;
+    let logging_service = LoggingService::new(Arc::new(_pool.clone()));
+    let _ = logging_service.log_system_with_entity(
+        "backup",
+        &id,
+        &format!("Backup '{}' deleted", backup.backup_type),
+        crate::models::log::LogLevel::Info
+    ).await;
+
     Ok(success_response(serde_json::json!({"message": "Backup deleted successfully"})))
 }
 
@@ -335,6 +386,7 @@ async fn restore_backup(
     // Create a restore job
     let job_request = CreateJobRequest {
         task_id: None,
+        used_database: None, // Restore jobs don't have a specific database
         job_type: JobType::Restore,
         backup_path: Some(backup.file_path.clone()),
     };

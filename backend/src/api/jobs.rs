@@ -3,12 +3,24 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use serde::Deserialize;
-use sqlx::SqlitePool;
+use serde::{Deserialize, Serialize};
+use sqlx::{SqlitePool, Row};
 
 use crate::models::{Job, CreateJobRequest, JobStatus};
 use crate::services::progress_tracker::ProgressTracker;
 use super::{ApiError, ApiResult, success_response, paginated_response};
+
+#[derive(Debug, Serialize)]
+pub struct JobWithDatabaseInfo {
+    #[serde(flatten)]
+    pub job: Job,
+    pub task_name: Option<String>,
+    pub task_database_name: Option<String>,
+    pub db_config_name: Option<String>,
+    pub db_config_host: Option<String>,
+    pub db_config_database_name: Option<String>,
+}
+
 
 #[derive(Deserialize)]
 pub struct ListQuery {
@@ -39,20 +51,20 @@ async fn list_jobs(
     let limit = query.limit.unwrap_or(10);
     let offset = (page - 1) * limit;
 
-    let mut sql = "SELECT * FROM jobs".to_string();
-    let mut count_sql = "SELECT COUNT(*) as count FROM jobs".to_string();
+    let mut sql = "SELECT j.*, t.name as task_name, t.database_name as task_database_name, dc.name as db_config_name, dc.host as db_config_host, dc.database_name as db_config_database_name FROM jobs j LEFT JOIN tasks t ON j.task_id = t.id LEFT JOIN database_configs dc ON t.database_config_id = dc.id".to_string();
+    let mut count_sql = "SELECT COUNT(*) as count FROM jobs j LEFT JOIN tasks t ON j.task_id = t.id LEFT JOIN database_configs dc ON t.database_config_id = dc.id".to_string();
     let mut conditions = Vec::new();
     
     if query.status.is_some() {
-        conditions.push("status = ?");
+        conditions.push("j.status = ?");
     }
     
     if query.job_type.is_some() {
-        conditions.push("job_type = ?");
+        conditions.push("j.job_type = ?");
     }
     
     if query.task_id.is_some() {
-        conditions.push("task_id = ?");
+        conditions.push("j.task_id = ?");
     }
     
     if !conditions.is_empty() {
@@ -61,9 +73,9 @@ async fn list_jobs(
         count_sql.push_str(&where_clause);
     }
     
-    sql.push_str(&format!(" ORDER BY created_at DESC LIMIT {} OFFSET {}", limit, offset));
+    sql.push_str(&format!(" ORDER BY j.created_at DESC LIMIT {} OFFSET {}", limit, offset));
 
-    let mut query_builder = sqlx::query_as(&sql);
+    let mut query_builder = sqlx::query(&sql);
     let mut count_query_builder = sqlx::query_as(&count_sql);
     
     if let Some(ref status) = query.status {
@@ -81,18 +93,42 @@ async fn list_jobs(
         count_query_builder = count_query_builder.bind(task_id);
     }
 
-    let mut jobs: Vec<Job> = query_builder.fetch_all(&pool).await?;
+    let rows = query_builder.fetch_all(&pool).await?;
     let total: (i64,) = count_query_builder.fetch_one(&pool).await?;
+
+    let mut jobs: Vec<JobWithDatabaseInfo> = rows.into_iter().map(|row| {
+        JobWithDatabaseInfo {
+            job: Job {
+                id: row.get("id"),
+                task_id: row.get("task_id"),
+                used_database: row.get("used_database"),
+                job_type: row.get("job_type"),
+                status: row.get("status"),
+                progress: row.get("progress"),
+                started_at: row.get("started_at"),
+                completed_at: row.get("completed_at"),
+                error_message: row.get("error_message"),
+                log_output: row.get("log_output"),
+                backup_path: row.get("backup_path"),
+                created_at: row.get("created_at"),
+            },
+            task_name: row.get("task_name"),
+            task_database_name: row.get("task_database_name"),
+            db_config_name: row.get("db_config_name"),
+            db_config_host: row.get("db_config_host"),
+            db_config_database_name: row.get("db_config_database_name"),
+        }
+    }).collect();
 
     // Update progress for running jobs using the same logic as detailed progress
     for job in &mut jobs {
-        if job.status == "running" || job.status == "compressing" {
-            if let Some(log_output) = &job.log_output {
+        if job.job.status == "running" || job.job.status == "compressing" {
+            if let Some(log_output) = &job.job.log_output {
                 if let Some(log_dir) = std::path::Path::new(log_output).parent() {
                     if let Some(log_dir_str) = log_dir.to_str() {
                         let progress_tracker = ProgressTracker::new(log_dir_str.to_string());
-                        if let Ok(detailed_progress) = progress_tracker.load_detailed_progress(&job.id).await {
-                            job.progress = detailed_progress.overall_progress as i32;
+                        if let Ok(detailed_progress) = progress_tracker.load_detailed_progress(&job.job.id).await {
+                            job.job.progress = detailed_progress.overall_progress as i32;
                         }
                     }
                 }
@@ -140,6 +176,7 @@ async fn create_job(
     Json(req): Json<CreateJobRequest>,
 ) -> ApiResult<impl axum::response::IntoResponse> {
     // Validate task exists if task_id is provided
+    // Validate task_id if provided
     if let Some(ref task_id) = req.task_id {
         let task_exists: Option<(String,)> = sqlx::query_as(
             "SELECT id FROM tasks WHERE id = ?"
@@ -157,12 +194,13 @@ async fn create_job(
 
     sqlx::query(
         r#"
-        INSERT INTO jobs (id, task_id, job_type, status, progress, started_at, completed_at, error_message, log_output, backup_path, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO jobs (id, task_id, used_database, job_type, status, progress, started_at, completed_at, error_message, log_output, backup_path, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         "#
     )
     .bind(&job.id)
     .bind(&job.task_id)
+    .bind(&job.used_database)
     .bind(&job.job_type)
     .bind(&job.status)
     .bind(&job.progress)
@@ -237,6 +275,17 @@ async fn delete_job(
         return Err(ApiError::NotFound("Job not found".to_string()));
     }
 
+    // Log the deletion
+    use crate::services::logging::LoggingService;
+    use std::sync::Arc;
+    let logging_service = LoggingService::new(Arc::new(pool.clone()));
+    let _ = logging_service.log_system_with_entity(
+        "job",
+        &id,
+        &format!("Job with status '{}' deleted", job.status),
+        crate::models::log::LogLevel::Info
+    ).await;
+
     Ok(success_response(serde_json::json!({"message": "Job deleted successfully"})))
 }
 
@@ -261,13 +310,25 @@ async fn cancel_job(
     }
 
     sqlx::query(
-        "UPDATE jobs SET status = ?, completed_at = ? WHERE id = ?"
+        "UPDATE jobs SET status = ?, completed_at = ?, error_message = ? WHERE id = ?"
     )
     .bind(JobStatus::Cancelled.to_string())
     .bind(chrono::Utc::now())
+    .bind("Job cancelled by user")
     .bind(&id)
     .execute(&pool)
     .await?;
+
+    // Clean up backup directory if it exists
+    let backup_dir = std::env::var("BACKUP_DIR").unwrap_or_else(|_| "data/backups".to_string());
+    let job_backup_dir = format!("{}/{}", backup_dir, id);
+    if std::path::Path::new(&job_backup_dir).exists() {
+        if let Err(e) = std::fs::remove_dir_all(&job_backup_dir) {
+            tracing::warn!("Failed to remove backup directory {}: {}", job_backup_dir, e);
+        } else {
+            tracing::info!("Cleaned up backup directory: {}", job_backup_dir);
+        }
+    }
 
     // TODO: Send signal to actually cancel the running process
 

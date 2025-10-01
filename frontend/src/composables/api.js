@@ -124,6 +124,11 @@ export const databaseConfigsApi = {
   // Check database permissions
   checkPermissions(id) {
     return apiClient.get(`/api/database-configs/${id}/permissions`)
+  },
+
+  // Get available databases for a connection
+  getDatabases(id) {
+    return apiClient.get(`/api/database-configs/${id}/databases`)
   }
 }
 
@@ -349,6 +354,29 @@ export const systemApi = {
     } catch (error) {
       console.error('Failed to fetch worker status:', error)
       return { success: false, error: error.message }
+    }
+  }
+}
+
+// Logs API - system logs
+export const logsApi = {
+  async list(params = {}) {
+    try {
+      const queryParams = new URLSearchParams()
+      if (params.page) queryParams.append('page', params.page)
+      if (params.limit) queryParams.append('limit', params.limit)
+      if (params.log_type) queryParams.append('log_type', params.log_type)
+      if (params.level) queryParams.append('level', params.level)
+      if (params.entity_type) queryParams.append('entity_type', params.entity_type)
+      if (params.entity_id) queryParams.append('entity_id', params.entity_id)
+      
+      const queryString = queryParams.toString()
+      const endpoint = queryString ? `/api/logs?${queryString}` : '/api/logs'
+      const response = await apiClient.request(endpoint)
+      return response
+    } catch (error) {
+      console.error('Failed to fetch logs:', error)
+      return { success: false, data: [], total: 0 }
     }
   }
 }

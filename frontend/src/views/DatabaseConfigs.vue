@@ -64,12 +64,12 @@
                   <div class="font-medium">{{ config.username }}</div>
                 </td>
                 <td>
-                  <div v-if="config.last_test_status" class="tooltip" :data-tip="`Last test: ${config.last_test_time || 'Unknown'}`">
-                    <div :class="['badge badge-sm', config.last_test_status === 'success' ? 'badge-success' : 'badge-error']">
+                  <div v-if="config.connection_status && config.connection_status !== 'untested'" class="tooltip" :data-tip="`Last test: ${config.last_tested || 'Unknown'}`">
+                    <div :class="['badge badge-sm', config.connection_status === 'success' ? 'badge-success' : 'badge-error']">
                       <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" :d="config.last_test_status === 'success' ? 'M5 13l4 4L19 7' : 'M6 18L18 6M6 6l12 12'"></path>
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" :d="config.connection_status === 'success' ? 'M5 13l4 4L19 7' : 'M6 18L18 6M6 6l12 12'"></path>
                       </svg>
-                      {{ config.last_test_status === 'success' ? 'Connected' : 'Failed' }}
+                      {{ config.connection_status === 'success' ? 'Connected' : 'Failed' }}
                     </div>
                   </div>
                   <div v-else class="badge badge-ghost">
@@ -189,14 +189,17 @@
           <div class="form-control w-full">
             <label class="label">
               <span class="label-text font-semibold">Database Name</span>
+              <span class="label-text-alt text-base-content/60">(Optional - leave empty for connection-only)</span>
             </label>
             <input
                 v-model="currentConfig.database_name"
                 type="text"
-                placeholder="my_database"
+                placeholder="my_database (optional)"
                 class="input input-bordered w-full"
-                required
             />
+            <label class="label">
+              <span class="label-text-alt text-base-content/60">If empty, you can select specific databases when creating tasks</span>
+            </label>
           </div>
 
           <!-- Username -->
@@ -441,12 +444,18 @@ const testConnection = async (id) => {
     if (response.success) {
       // Show success toast/notification
       showTestResult(true, 'Connection successful!')
+      // Reload configs to update connection status
+      await loadConfigs()
     } else {
       showTestResult(false, 'Connection failed')
+      // Reload configs to update connection status
+      await loadConfigs()
     }
   } catch (err) {
     console.error('Error testing connection:', err)
     showTestResult(false, 'Connection failed: ' + err.message)
+    // Reload configs to update connection status
+    await loadConfigs()
   } finally {
     testingConnection.value = null
   }
@@ -462,8 +471,12 @@ const testConnectionInModal = async () => {
       const response = await databaseConfigsApi.test(currentConfig.value.id)
       if (response.success) {
         showTestResult(true, 'Connection successful!')
+        // Reload configs to update connection status
+        await loadConfigs()
       } else {
         showTestResult(false, 'Connection failed')
+        // Reload configs to update connection status
+        await loadConfigs()
       }
     } else {
       // For new configs, we can't test without saving first
@@ -473,6 +486,8 @@ const testConnectionInModal = async () => {
   } catch (err) {
     console.error('Error testing connection in modal:', err)
     showTestResult(false, 'Connection failed: ' + err.message)
+    // Reload configs to update connection status
+    await loadConfigs()
   } finally {
     testingModalConnection.value = false
   }

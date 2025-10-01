@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3] - 2025-10-01
+
+### Added
+- **Database Independence for Jobs and Backups**: Added `used_database` field to both `jobs` and `backups` tables
+- **Static Database Information**: Jobs and backups now store database information in format `<connection-name>/<database>` (e.g., `localhost/langify`)
+- **Task-Specific Database Selection**: Tasks can now specify a specific database name independent of the connection's default database
+- **Dynamic Database Discovery**: System automatically discovers available databases for connections without default database
+- **Database Information Display**: Frontend now shows database information in consistent format across Jobs and Backups tables
+
+### Changed
+- **Job Creation**: Jobs now store `used_database` field derived from task configuration at creation time
+- **Backup Creation**: Backups now store `used_database` field in metadata files and database records
+- **Frontend Display Logic**: Updated `getDatabaseDisplayName` and `getDatabaseForJob` functions to prioritize `used_database` field
+- **Database Migration**: Added migration to add `used_database` column to existing `jobs` and `backups` tables
+- **Backup Metadata**: Enhanced `BackupMetadata` structure to include `used_database` field
+
+### Fixed
+- **Task Database Selection**: Fixed issue where task database changes would affect existing backup displays
+- **Database Information Consistency**: Resolved problem where backup database information would change when task database was modified
+- **Frontend Fallback Logic**: Improved fallback display logic for backups without `used_database` field
+
+### Technical Details
+- **Database Schema**: Added `used_database TEXT` column to both `jobs` and `backups` tables
+- **Model Updates**: Extended `Job`, `Backup`, and `BackupMetadata` models with `used_database` field
+- **API Compatibility**: Maintained backward compatibility while adding new database information fields
+- **Migration Safety**: Database migrations safely add new columns without affecting existing data
+
 ## [0.1.2] - 2025-09-30
 
 ### Added

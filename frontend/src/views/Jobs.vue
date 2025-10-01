@@ -20,6 +20,16 @@
             <option value="cancelled">🚫 Cancelled</option>
           </select>
         </div>
+        <button 
+          v-if="selectedJobs.length > 0"
+          @click="deleteSelectedJobs"
+          class="btn btn-error btn-sm"
+          :disabled="isDeleting"
+        >
+          <span v-if="isDeleting" class="loading loading-spinner loading-xs"></span>
+          <span v-else>🗑️</span>
+          Delete Selected ({{ selectedJobs.length }})
+        </button>
       </div>
     </div>
 
@@ -43,10 +53,20 @@
             ⚡ {{ activeJobs.length }} Active
           </div>
         </h2>
+
+
         <div class="overflow-x-auto">
           <table class="table">
             <thead>
               <tr>
+                <th>
+                  <input 
+                    type="checkbox" 
+                    class="checkbox checkbox-primary checkbox-sm" 
+                    :checked="selectedJobs.length === jobs.length && jobs.length > 0"
+                    @change="toggleSelectAll"
+                  />
+                </th>
                 <th>Job</th>
                 <th>Type</th>
                 <th>Task/Database</th>
@@ -68,6 +88,14 @@
                 class="transition-all duration-200 ease-in-out"
               >
                 <td>
+                  <input 
+                    type="checkbox" 
+                    class="checkbox checkbox-primary checkbox-sm" 
+                    :checked="selectedJobs.includes(job.id)"
+                    @change="toggleJobSelection(job.id)"
+                  />
+                </td>
+                <td>
                   <div class="font-mono text-sm">{{ job.id.slice(0, 8) }}...</div>
                   <div class="text-xs text-base-content/50">{{ formatDate(job.created_at) }}</div>
                 </td>
@@ -87,8 +115,16 @@
                   </div>
                 </td>
                 <td>
-                  <div class="radial-progress transition-all duration-300 ease-out" :class="getProgressClass(job.status)" :style="`--value:${job.progress}`">
+                  <!-- Progress bar only for running jobs -->
+                  <div v-if="job.status === 'running' || job.status === 'pending' || job.status === 'compressing'" 
+                       class="radial-progress transition-all duration-300 ease-out" 
+                       :class="getProgressClass(job.status)" 
+                       :style="`--value:${job.progress}`">
                     {{ job.progress }}%
+                  </div>
+                  <!-- Simple text for completed jobs -->
+                  <div v-else class="text-center">
+                    <span :class="getProgressTextClass(job.status)">100%</span>
                   </div>
                 </td>
                 <td>
@@ -369,6 +405,8 @@ const loadingProgress = ref(false)
 const error = ref(null)
 const cancellingJob = ref(null)
 const statusFilter = ref('')
+const selectedJobs = ref([])
+const isDeleting = ref(false)
 
 // Auto-refresh for active jobs
 let refreshInterval = null
@@ -551,6 +589,23 @@ const getTaskName = (taskId) => {
 }
 
 const getDatabaseForJob = (job) => {
+  // Use used_database field if available (new format: "connection/database")
+  if (job.used_database) {
+    return job.used_database
+  }
+  
+  // Use the new backend data if available
+  if (job.db_config_name) {
+    // Use task-specific database_name if available, otherwise use config's database_name
+    const database_name = job.task_database_name || job.db_config_database_name
+    if (database_name) {
+      return database_name
+    } else {
+      return job.db_config_name
+    }
+  }
+  
+  // Fallback to old method
   const task = tasks.value.find(t => t.id === job.task_id)
   if (!task) return null
   
@@ -609,6 +664,15 @@ const getProgressClass = (status) => {
     case 'failed': return 'text-error'
     case 'cancelled': return 'text-neutral'
     default: return 'text-base-content'
+  }
+}
+
+const getProgressTextClass = (status) => {
+  switch (status) {
+    case 'completed': return 'text-success font-semibold'
+    case 'failed': return 'text-error font-semibold'
+    case 'cancelled': return 'text-neutral font-semibold'
+    default: return 'text-base-content font-semibold'
   }
 }
 
@@ -757,6 +821,61 @@ const stopAutoRefresh = () => {
   if (refreshInterval) {
     clearTimeout(refreshInterval)
     refreshInterval = null
+  }
+}
+
+// Multi-selection functions
+const toggleJobSelection = (jobId) => {
+  const index = selectedJobs.value.indexOf(jobId)
+  if (index > -1) {
+    selectedJobs.value.splice(index, 1)
+  } else {
+    selectedJobs.value.push(jobId)
+  }
+}
+
+const toggleSelectAll = () => {
+  if (selectedJobs.value.length === jobs.value.length) {
+    selectedJobs.value = []
+  } else {
+    selectedJobs.value = jobs.value.map(job => job.id)
+  }
+}
+
+const deleteSelectedJobs = async () => {
+  if (selectedJobs.value.length === 0) return
+  
+  const jobCount = selectedJobs.value.length
+  const confirmed = confirm(`Are you sure you want to delete ${jobCount} job(s)? This action cannot be undone.`)
+  if (!confirmed) return
+  
+  isDeleting.value = true
+  
+  try {
+    // Delete jobs one by one to show progress
+    for (let i = 0; i < selectedJobs.value.length; i++) {
+      const jobId = selectedJobs.value[i]
+      await jobsApi.delete(jobId)
+      
+      // Remove from local state immediately for visual feedback
+      const jobIndex = jobs.value.findIndex(job => job.id === jobId)
+      if (jobIndex > -1) {
+        jobs.value.splice(jobIndex, 1)
+      }
+      
+      // Small delay to show the deletion progress
+      await new Promise(resolve => setTimeout(resolve, 200))
+    }
+    
+    // Clear selection
+    selectedJobs.value = []
+    
+    showToast(true, `Successfully deleted ${jobCount} job(s)`)
+  } catch (err) {
+    console.error('Error deleting jobs:', err)
+    showToast(false, 'Failed to delete some jobs. Please try again.')
+  } finally {
+    isDeleting.value = false
   }
 }
 

@@ -5,10 +5,22 @@
         <h1 class="text-3xl font-bold text-base-content">Backup Tasks</h1>
         <p class="text-base-content/70 mt-2">Manage scheduled backup tasks</p>
       </div>
-      <button @click="openAddModal" class="btn btn-primary">
-        <span class="mr-2">📋</span>
-        Add Task
-      </button>
+      <div class="flex gap-3">
+        <button 
+          v-if="selectedTasks.length > 0"
+          @click="deleteSelectedTasks"
+          class="btn btn-error btn-sm"
+          :disabled="isDeleting"
+        >
+          <span v-if="isDeleting" class="loading loading-spinner loading-xs"></span>
+          <span v-else>🗑️</span>
+          Delete Selected ({{ selectedTasks.length }})
+        </button>
+        <button @click="openAddModal" class="btn btn-primary">
+          <span class="mr-2">📋</span>
+          Add Task
+        </button>
+      </div>
     </div>
 
     <!-- Error State -->
@@ -31,10 +43,19 @@
     <!-- Tasks Table -->
     <div v-else-if="!loading" class="card bg-base-200 shadow-xl">
       <div class="card-body">
+
         <div class="overflow-x-auto">
           <table class="table">
             <thead>
               <tr>
+                <th>
+                  <input 
+                    type="checkbox" 
+                    class="checkbox checkbox-primary checkbox-sm" 
+                    :checked="selectedTasks.length === tasks.length && tasks.length > 0"
+                    @change="toggleSelectAll"
+                  />
+                </th>
                 <th>Task Name</th>
                 <th>Database</th>
                 <th>Schedule</th>
@@ -48,12 +69,20 @@
             <tbody>
               <tr v-for="task in tasks" :key="task.id">
                 <td>
+                  <input 
+                    type="checkbox" 
+                    class="checkbox checkbox-primary checkbox-sm" 
+                    :checked="selectedTasks.includes(task.id)"
+                    @change="toggleTaskSelection(task.id)"
+                  />
+                </td>
+                <td>
                   <div class="font-medium">{{ task.name }}</div>
                   <div class="text-sm text-base-content/70">{{ formatSchedule(task.cron_schedule) }}</div>
                 </td>
                 <td>
-                  <div class="font-medium">{{ getDatabaseName(task.database_config_id) }}</div>
-                  <div class="text-sm text-base-content/70">{{ getDatabaseDetails(task.database_config_id) }}</div>
+                  <div class="font-medium">{{ getDatabaseDisplayName(task) }}</div>
+                  <div class="text-sm text-base-content/70">{{ getDatabaseDisplayDetails(task) }}</div>
                 </td>
                 <td>
                   <code class="text-sm bg-base-300 px-2 py-1 rounded">{{ task.cron_schedule }}</code>
@@ -141,12 +170,29 @@
             <label class="label">
               <span class="label-text font-semibold">🗄️ Database Configuration</span>
             </label>
-            <select v-model="currentTask.database_config_id" class="select select-bordered w-full" required>
-              <option value="">Select a database...</option>
+            <select v-model="currentTask.database_config_id" @change="onDatabaseConfigChange" class="select select-bordered w-full" required>
+              <option value="">Select a Connection...</option>
               <option v-for="config in databaseConfigs" :key="config.id" :value="config.id">
-                {{ config.name }} ({{ config.host }}:{{ config.port }}/{{ config.database_name }})
+                {{ config.name }} ({{ config.host }}:{{ config.port }}{{ config.database_name ? '/' + config.database_name : '' }})
               </option>
             </select>
+          </div>
+
+          <!-- Specific Database Selection (if connection has no default database) -->
+          <div v-if="selectedConfig && !selectedConfig.database_name" class="form-control w-full">
+            <label class="label">
+              <span class="label-text font-semibold">📊 Specific Database</span>
+              <span class="label-text-alt text-base-content/60">Select which database to backup</span>
+            </label>
+            <select v-model="currentTask.database_name" class="select select-bordered w-full" required>
+              <option value="">Select a database...</option>
+              <option v-for="db in availableDatabases" :key="db" :value="db">
+                {{ db }}
+              </option>
+            </select>
+            <label class="label">
+              <span class="label-text-alt text-base-content/60">Available databases from the selected connection</span>
+            </label>
           </div>
 
           <!-- Cron Schedule -->
@@ -260,6 +306,8 @@ const router = useRouter()
 // State management
 const tasks = ref([])
 const databaseConfigs = ref([])
+const availableDatabases = ref([])
+const selectedConfig = ref(null)
 const taskModal = ref(null)
 const isEditing = ref(false)
 const loading = ref(true)
@@ -268,10 +316,13 @@ const error = ref(null)
 const modalError = ref(null)
 const runningTask = ref(null)
 const showAdvancedOptions = ref(false)
+const selectedTasks = ref([])
+const isDeleting = ref(false)
 
 const currentTask = ref({
   name: '',
   database_config_id: '',
+  database_name: '',
   cron_schedule: '',
   compression_type: 'gzip',
   cleanup_days: 30,
@@ -304,10 +355,58 @@ const loadDatabaseConfigs = async () => {
   try {
     const response = await databaseConfigsApi.list()
     if (response.success) {
-      databaseConfigs.value = response.data
+      // Only show successfully tested database configurations
+      databaseConfigs.value = response.data.filter(config => 
+        config.connection_status === 'success'
+      )
     }
   } catch (err) {
     console.error('Error loading database configs:', err)
+  }
+}
+
+// Handle database config selection change
+const onDatabaseConfigChange = async () => {
+  const configId = currentTask.value.database_config_id
+  if (!configId) {
+    selectedConfig.value = null
+    availableDatabases.value = []
+    currentTask.value.database_name = ''
+    return
+  }
+
+  // Find the selected config
+  selectedConfig.value = databaseConfigs.value.find(c => c.id === configId)
+  
+  // Store the current database_name to preserve it during editing
+  const currentDatabaseName = currentTask.value.database_name
+  
+  // If the config has a default database, use it (only if not editing)
+  if (selectedConfig.value && selectedConfig.value.database_name) {
+    if (!isEditing.value) {
+      currentTask.value.database_name = selectedConfig.value.database_name
+    }
+    availableDatabases.value = []
+  } else {
+    // Load available databases for this connection
+    try {
+      const response = await databaseConfigsApi.getDatabases(configId)
+      if (response.success) {
+        availableDatabases.value = response.data.databases || []
+        // Clear the current database selection only if not editing
+        if (!isEditing.value) {
+          currentTask.value.database_name = ''
+        }
+      }
+    } catch (err) {
+      console.error('Error loading available databases:', err)
+      availableDatabases.value = []
+    }
+  }
+  
+  // Restore the database_name if we're editing and it was cleared
+  if (isEditing.value && currentDatabaseName && !currentTask.value.database_name) {
+    currentTask.value.database_name = currentDatabaseName
   }
 }
 
@@ -317,27 +416,40 @@ const openAddModal = () => {
   currentTask.value = {
     name: '',
     database_config_id: '',
+    database_name: '',
     cron_schedule: '0 2 * * *',
     compression_type: 'gzip',
     cleanup_days: 30,
     use_non_transactional: false
   }
+  selectedConfig.value = null
+  availableDatabases.value = []
   showAdvancedOptions.value = false
   modalError.value = null
   taskModal.value.showModal()
 }
 
-const editTask = (task) => {
+const editTask = async (task) => {
   isEditing.value = true
   currentTask.value = {
     id: task.id,
     name: task.name,
     database_config_id: task.database_config_id,
+    database_name: task.database_name || '',
     cron_schedule: task.cron_schedule,
     compression_type: task.compression_type,
     cleanup_days: task.cleanup_days,
     use_non_transactional: task.use_non_transactional || false
   }
+  
+  // Load the selected config and available databases
+  await onDatabaseConfigChange()
+  
+  // Set the task-specific database_name after loading available databases
+  if (task.database_name) {
+    currentTask.value.database_name = task.database_name
+  }
+  
   showAdvancedOptions.value = task.use_non_transactional || false
   modalError.value = null
   taskModal.value.showModal()
@@ -347,6 +459,8 @@ const closeModal = () => {
   taskModal.value.close()
   modalError.value = null
   showAdvancedOptions.value = false
+  selectedConfig.value = null
+  availableDatabases.value = []
 }
 
 // Task operations
@@ -359,6 +473,7 @@ const saveTask = async () => {
       // Update existing task
       const updateData = {
         name: currentTask.value.name,
+        database_name: currentTask.value.database_name,
         cron_schedule: currentTask.value.cron_schedule,
         compression_type: currentTask.value.compression_type,
         cleanup_days: currentTask.value.cleanup_days,
@@ -445,10 +560,37 @@ const getDatabaseName = (configId) => {
   return config ? config.name : 'Unknown Database'
 }
 
-const getDatabaseDetails = (configId) => {
+const getDatabaseDetails = (configId, taskDatabaseName = null) => {
   const config = databaseConfigs.value.find(c => c.id === configId)
   if (!config) return 'Unknown Database'
-  return `${config.database_name} @ ${config.host}:${config.port}`
+  
+  // Use task-specific database_name if provided, otherwise use config's database_name
+  const database_name = taskDatabaseName || config.database_name
+  return database_name || 'No database specified'
+}
+
+const getDatabaseDisplayName = (task) => {
+  // Use the new backend data if available
+  if (task.db_config_name) {
+    return task.db_config_name
+  }
+  // Fallback to old method
+  return getDatabaseName(task.database_config_id)
+}
+
+const getDatabaseDisplayDetails = (task) => {
+  // Use the new backend data if available
+  if (task.db_config_name) {
+    // Use task-specific database_name if available, otherwise use config's database_name
+    const database_name = task.database_name || task.db_config_database_name
+    if (database_name) {
+      return database_name
+    } else {
+      return task.db_config_name
+    }
+  }
+  // Fallback to old method with task-specific database_name
+  return getDatabaseDetails(task.database_config_id, task.database_name)
 }
 
 const formatSchedule = (cronSchedule) => {
@@ -511,6 +653,61 @@ const showToast = (success, message) => {
       toast.parentNode.removeChild(toast)
     }
   }, 5000)
+}
+
+// Multi-selection functions
+const toggleTaskSelection = (taskId) => {
+  const index = selectedTasks.value.indexOf(taskId)
+  if (index > -1) {
+    selectedTasks.value.splice(index, 1)
+  } else {
+    selectedTasks.value.push(taskId)
+  }
+}
+
+const toggleSelectAll = () => {
+  if (selectedTasks.value.length === tasks.value.length) {
+    selectedTasks.value = []
+  } else {
+    selectedTasks.value = tasks.value.map(task => task.id)
+  }
+}
+
+const deleteSelectedTasks = async () => {
+  if (selectedTasks.value.length === 0) return
+  
+  const taskCount = selectedTasks.value.length
+  const confirmed = confirm(`Are you sure you want to delete ${taskCount} task(s)? This action cannot be undone.`)
+  if (!confirmed) return
+  
+  isDeleting.value = true
+  
+  try {
+    // Delete tasks one by one to show progress
+    for (let i = 0; i < selectedTasks.value.length; i++) {
+      const taskId = selectedTasks.value[i]
+      await tasksApi.delete(taskId)
+      
+      // Remove from local state immediately for visual feedback
+      const taskIndex = tasks.value.findIndex(task => task.id === taskId)
+      if (taskIndex > -1) {
+        tasks.value.splice(taskIndex, 1)
+      }
+      
+      // Small delay to show the deletion progress
+      await new Promise(resolve => setTimeout(resolve, 200))
+    }
+    
+    // Clear selection
+    selectedTasks.value = []
+    
+    showToast(true, `Successfully deleted ${taskCount} task(s)`)
+  } catch (err) {
+    console.error('Error deleting tasks:', err)
+    showToast(false, 'Failed to delete some tasks. Please try again.')
+  } finally {
+    isDeleting.value = false
+  }
 }
 
 // Initialize
