@@ -3,7 +3,7 @@
 # Variablen
 set USER casparjones
 set IMAGE rdumper
-set TAG v0.1.2
+set TAG v0.1.3
 set FULLNAME "$USER/$IMAGE:$TAG"
 
 echo "👉 Baue Docker Image: $FULLNAME"
