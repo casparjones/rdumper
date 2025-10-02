@@ -117,7 +117,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 
 # Startup-Script: erzeugt config.js zur Laufzeit
 RUN echo '#!/bin/sh' > /app/start.sh && \
-    echo 'echo "window.__RDUMPER_API_URL__=\"${API_BASE_URL}\";" > /app/static/assats/config.js' >> /app/start.sh && \
+    echo 'echo "window.__RDUMPER_API_URL__=\"${API_BASE_URL}\";" > /app/static/assets/config.js' >> /app/start.sh && \
     echo 'exec ./rdumper-backend --host 0.0.0.0 --port 3000 --database-url "$DATABASE_URL" --backup-dir "$BACKUP_DIR" --log-dir "$LOG_DIR" --static-dir "$STATIC_DIR"' >> /app/start.sh && \
     chmod +x /app/start.sh
 

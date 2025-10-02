@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.6] - 2025-10-02
+### Added
+- **Human-Readable Backup Directory Names**: Backup directories now use format `<database-config-name>-<database-name>-<uuid>` instead of just `<uuid>`
+- **Improved Backup Organization**: Backup folders are now easily identifiable by database name for better file system navigation
+- **Filesystem-Safe Naming**: Automatic sanitization of database names to ensure compatibility with all filesystems
+
+### Changed
+- **Backup Directory Structure**: New backups create directories with meaningful names (e.g., `fschen.de-canadmin-550e8400-e29b-41d4-a716-446655440000`)
+- **Backward Compatibility**: Existing UUID-only backup directories continue to work seamlessly
+- **Database Name Resolution**: Uses `used_database` field format for consistent naming across scheduled and manual backups
+
+### Technical Details
+- **FilesystemBackupService**: Enhanced `generate_backup_directory_name` function with task-aware naming
+- **Character Sanitization**: Replaces filesystem-unsafe characters (/, \, :, *, ?, ", <, >, |) with underscores
+- **Fallback Logic**: Uses database config name when task information is unavailable
+
 ## [0.1.5] - 2025-10-02
 ### Added
 - **Runtime configuration for the frontend**

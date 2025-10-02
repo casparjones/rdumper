@@ -1,0 +1,1 @@
+window.__RDUMPER_API_URL__ = "http://localhost:3000";

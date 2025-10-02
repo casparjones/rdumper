@@ -17,6 +17,36 @@ impl FilesystemBackupService {
         Self { backup_base_dir }
     }
     
+    /// Generate a human-readable backup directory name: <db-name>-<uuid>
+    fn generate_backup_directory_name(&self, database_config: &DatabaseConfig, task: Option<&Task>) -> String {
+        let uuid = uuid::Uuid::new_v4().to_string();
+        
+        // Use used_database format if we have task info, otherwise fall back to config name
+        let db_name = if let Some(task) = task {
+            let database_name = match &task.database_name {
+                Some(db_name) => db_name.clone(),
+                None => database_config.database_name.clone(),
+            };
+            format!("{}-{}", database_config.name, database_name)
+        } else {
+            database_config.name.clone()
+        };
+        
+        // Sanitize database name to be filesystem-safe
+        let sanitized_name = db_name
+            .replace(" ", "_")
+            .replace("/", "_")
+            .replace("\\", "_")
+            .replace(":", "_")
+            .replace("*", "_")
+            .replace("?", "_")
+            .replace("\"", "_")
+            .replace("<", "_")
+            .replace(">", "_")
+            .replace("|", "_");
+        format!("{}-{}", sanitized_name, uuid)
+    }
+    
     /// Create a new backup process
     pub async fn create_backup_process(
         &self,
@@ -24,7 +54,9 @@ impl FilesystemBackupService {
         database_config: &DatabaseConfig,
         task: Option<&Task>,
     ) -> Result<BackupProcess> {
-        let root_dir = Path::new(&self.backup_base_dir).join(backup_id);
+        // Use the human-readable directory name instead of just the backup_id
+        let directory_name = self.generate_backup_directory_name(database_config, task);
+        let root_dir = Path::new(&self.backup_base_dir).join(&directory_name);
         let compression_type = task.map(|t| t.compression_type.clone()).unwrap_or_else(|| "gzip".to_string());
         let backup_type = "scheduled".to_string();
         
@@ -459,9 +491,9 @@ impl FilesystemBackupService {
         source_dir: &str, // Directory containing files to backup
         compression_type: &str,
     ) -> Result<Backup> {
-        // Generate a unique job ID for the folder name
-        let job_id = uuid::Uuid::new_v4().to_string();
-        let backup_dir = Path::new(&self.backup_base_dir).join(&job_id);
+        // Generate a human-readable directory name for the folder
+        let directory_name = self.generate_backup_directory_name(database_config, task);
+        let backup_dir = Path::new(&self.backup_base_dir).join(&directory_name);
         
         // Create backup directory
         fs::create_dir_all(&backup_dir).await?;
