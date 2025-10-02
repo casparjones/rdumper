@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.5] - 2025-10-02
+### Added
+- **Runtime configuration for the frontend**
+    - The API URL (`API_BASE_URL`) is now injected at runtime.
+    - On container startup a `config.js` file is generated and consumed by the frontend.
+    - No need to rebuild the Docker image to change the API URL.
+
+### Changed
+- Improved frontend fallback logic:
+    1. `window.__RDUMPER_API_URL__` (from `config.js`)
+    2. `import.meta.env` (used in local Vite development)
+    3. automatic detection via `window.location`
+
 ## [0.1.4] - 2025-10-01
 
 ### Fixed

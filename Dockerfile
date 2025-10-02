@@ -103,21 +103,22 @@ EXPOSE 3000
 # Volumes für Config DB und Backups
 VOLUME ["/app/data"]
 
-# Environment variables (defaults - can be overridden by CapRover)
-ENV RUST_LOG=info
-ENV DATABASE_URL=sqlite:///app/data/rdumper.db
-ENV BACKUP_DIR=/app/data/backups
-ENV LOG_DIR=/app/data/logs
-ENV STATIC_DIR=/app/static
+# Default ENV – kann bei docker run oder CapRover überschrieben werden
+ENV RUST_LOG=info \
+    DATABASE_URL=sqlite:///app/data/rdumper.db \
+    BACKUP_DIR=/app/data/backups \
+    LOG_DIR=/app/data/logs \
+    STATIC_DIR=/app/static \
+    API_BASE_URL=""
 
-# Health check (auskommentiert, weil /api/system 404 liefert)
+# Healthcheck
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD wget --no-verbose --tries=1 --spider http://localhost:3000/api/health || exit 1
 
-# Create startup script
+# Startup-Script: erzeugt config.js zur Laufzeit
 RUN echo '#!/bin/sh' > /app/start.sh && \
+    echo 'echo "window.__RDUMPER_API_URL__=\"${API_BASE_URL}\";" > /app/static/assats/config.js' >> /app/start.sh && \
     echo 'exec ./rdumper-backend --host 0.0.0.0 --port 3000 --database-url "$DATABASE_URL" --backup-dir "$BACKUP_DIR" --log-dir "$LOG_DIR" --static-dir "$STATIC_DIR"' >> /app/start.sh && \
     chmod +x /app/start.sh
 
-# Start the application
 CMD ["/app/start.sh"]

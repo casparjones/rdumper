@@ -1,25 +1,33 @@
-// API Base URL - automatische Domain-Erkennung mit Environment-basiertem Port
+// API Base URL - automatische Erkennung mit Runtime-Fallback
 const getApiBaseUrl = () => {
-  // Wenn VITE_API_URL explizit gesetzt ist, verwende diese
-  if (import.meta.env.VITE_API_URL) {
-    return import.meta.env.VITE_API_URL
-  }
-  
-  // Automatische Domain-Erkennung
-  const protocol = window.location.protocol
-  const hostname = window.location.hostname
-  const port = import.meta.env.VITE_API_PORT || '443'
-  
-  // Für Development: localhost mit konfigurierbarem Port
-  if (hostname === 'localhost' || hostname === '127.0.0.1') {
-    return `${protocol}//${hostname}:${port}`
-  }
-  
-  // Für Production: gleiche Domain mit konfigurierbarem Port
-  return `${protocol}//${hostname}:${port}`
-}
+    // 1. Laufzeitkonfig (aus config.js, erzeugt im Docker-Container)
+    if (window.__RDUMPER_API_URL__) {
+        return window.__RDUMPER_API_URL__;
+    }
 
-const API_BASE_URL = getApiBaseUrl()
+    // 2. Vite-ENV (funktioniert im Dev-Modus oder wenn fest im Build gesetzt)
+    const { VITE_API_URL, VITE_API_PORT } = import.meta.env;
+    if (VITE_API_URL && VITE_API_URL !== 'http://localhost:3000') {
+        return VITE_API_URL;
+    }
+
+    // 3. Automatische Domain-Erkennung (Fallback)
+    const protocol = window.location.protocol;
+    const hostname = window.location.hostname;
+    const port = VITE_API_PORT || (protocol === 'https:' ? '443' : '80');
+
+    // Falls Standardport, keinen Port anhängen
+    if (
+        (protocol === 'https:' && port === '443') ||
+        (protocol === 'http:' && port === '80')
+    ) {
+        return `${protocol}//${hostname}`;
+    }
+
+    return `${protocol}//${hostname}:${port}`;
+};
+
+export const API_BASE_URL = getApiBaseUrl();
 
 // Generic API client
 class ApiClient {
